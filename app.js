@@ -1212,12 +1212,13 @@ async function viewEncaissements(view) {
   // Onglets
   const nTodo = ov.providers.reduce((s, x) => s + x.n_anomalies, 0);
   const nPay = ov.providers.reduce((s, x) => s + x.n_versements, 0);
-  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['parametres', 'Paramètres']];
+  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['previsionnel', 'Prévisionnel'], ['parametres', 'Paramètres']];
   if (canWrite() && !S.demo) tabs.push(['deposer', 'Déposer des exports']);
   const body = el('div');
   view.appendChild(el('div', { class: 'panel' }, el('div', { class: 'tabs' }, tabs.map(([k, l]) => el('button', { class: p.tab === k ? 'on' : '', onclick: () => go({ ...p, tab: k, page: 1, etat: '', kind: '' }) }, l))), body));
   if (p.tab === 'versements') await pspPayoutsTab(body, p, go, ov);
-  else if (p.tab === 'parametres') pspSettingsTab(body, ov);
+  else if (p.tab === 'previsionnel') await pspForecastTab(body, p, go);
+  else if (p.tab === 'parametres') await pspSettingsTab(body, ov);
   else if (p.tab === 'deposer') body.appendChild(uploadPanel({ title: 'Déposez les exports des prestataires', label: 'Exports encaissements web', accept: '.csv,.xlsx',
     hint: 'Shopify : transactions des commandes, versements et transactions Shopify Payments, export Commandes (n° TikTok) — JUST (CSV) — TikTok Shop (income .xlsx). Reconnus automatiquement ; un export qui recouvre une période déjà chargée n\'ajoute que les nouveautés.',
     note: 'Seules les colonnes utiles au rapprochement sont lues (jamais les noms ni e-mails des clients). Les fichiers sont traités par le poste de traitement comme les relevés bancaires.' }));
@@ -1329,7 +1330,7 @@ async function pspLinkModal(r) {
     list, el('label', { class: 'f', style: 'margin-top:10px' }, 'Commentaire', comment)), []);
 }
 
-function pspSettingsTab(body, ov) {
+async function pspSettingsTab(body, ov) {
   const admin = isAdmin();
   body.append(el('p', { class: 'small muted' }, 'Délai de versement : nombre de jours tolérés entre la date annoncée par le prestataire et l\'arrivée en banque, au-delà duquel le versement est signalé en retard. ',
     'Délai commande : âge minimal d\'une commande avant de la signaler introuvable chez le prestataire. Fenêtre banque : rapprochement par montant entre J et J + n. ',
@@ -1349,6 +1350,7 @@ function pspSettingsTab(body, ov) {
         } }, 'Enregistrer') : null));
     })))));
   if (!admin) body.appendChild(el('p', { class: 'small muted' }, 'Seuls les administrateurs modifient ces paramètres.'));
+  await pspForecastRulesSettings(body);
 }
 
 async function pspTracePanel(order, onClose) {
@@ -1380,4 +1382,121 @@ async function pspTracePanel(order, onClose) {
         : el('div', { class: 'small muted' }, t.transactions.some(x => x.payout_date) ? `Versement prévu le ${d(t.transactions.find(x => x.payout_date).payout_date)}` : 'Pas encore de versement.'))));
   if (t.anomalies.length) panel.appendChild(el('div', { style: 'margin-top:8px' }, t.anomalies.map(a => el('div', { class: 'anomaly alerte' }, el('div', {}, el('strong', {}, (L.psp_todo[a.kind] || [a.kind])[0]), ' — ', a.message)))));
   return panel;
+}
+
+// ------------------------------------------------------------------ encaissements web : prévisionnel des arrivées en banque
+const FC_DOW = ['', 'lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'];
+const FC_DOW_LONG = ['', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+const FC_QUALITY = { mesure: null, estimation: ['estimation', 'b-info'], hypothese: ['hypothèse à confirmer', 'b-warn'] };
+const FC_SYNC = { ok: ['à jour', 'b-ok'], partiel: ['partielle (reprise au prochain passage)', 'b-warn'], erreur: ['en erreur', 'b-bad'] };
+const fcShift = (iso, n) => { const x = new Date(iso + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const fcShort = iso => { const [, m, dd] = String(iso).split('-'); return `${dd}/${m}`; };
+// Écart reçu − prévu : vert si proche (5 % ou 50 €), sinon orange (reçu en plus) ou rouge (reçu en moins).
+function fcEcartClass(ecart, prevu) {
+  if (ecart === null || ecart === undefined) return '';
+  return Math.abs(ecart) <= Math.max(5000, Math.abs(prevu) * 0.05) ? 'fc-ok' : (ecart < 0 ? 'fc-bad' : 'fc-warn');
+}
+function fcSyncLine(sync) {
+  const s = (sync || []).find(x => x.source === 'shopify');
+  if (!s) return el('div', { class: 'small muted' }, 'Synchronisation Shopify : pas encore en service — les ventes proviennent des exports « Transactions » déposés.');
+  const st = FC_SYNC[s.last_status] || [s.last_status || '—', ''];
+  return el('div', { class: 'small' }, 'Synchronisation Shopify : ', el('span', { class: 'badge ' + st[1] }, st[0]),
+    ` · dernier passage ${dt(s.last_run_at)}`, s.last_success_at ? ` · dernier succès ${dt(s.last_success_at)}` : '',
+    s.covered_from ? ` · période couverte du ${d(s.covered_from)} au ${d(s.covered_to)}` : '',
+    s.last_count !== null && s.last_count !== undefined ? ` · ${s.last_count} ligne(s) au dernier passage` : '',
+    s.last_error ? el('div', { class: 'muted' }, 'Dernière erreur : ' + s.last_error) : null);
+}
+
+async function pspForecastTab(body, p, go) {
+  const f = await api('GET', '/api/psp/forecast?' + qs({ from: p.fc_from || '', to: p.fc_to || '' }));
+  const provs = f.providers;
+  const nav = n => go({ ...p, fc_from: fcShift(f.from, n), fc_to: fcShift(f.to, n) });
+  const t = f.totaux || {};
+  const ecartConnu = t.reel - t.prevu_connu;
+  body.append(
+    el('p', { class: 'small muted' }, 'Montants attendus en banque par jour et par prestataire, calculés à partir des ventes Shopify (moins les remboursements) et des règles de délai et de frais (Paramètres). ',
+      'Banque : pas de crédit le week-end ni les jours fériés (report au jour ouvré suivant). Quand un prestataire a annoncé un versement pas encore reçu, son montant remplace l\'estimation. ',
+      'Réel : crédits bancaires rattachés aux versements, à défaut crédits au libellé du prestataire (l\'écran Banque n\'est pas modifié).'),
+    fcSyncLine(f.sync),
+    el('div', { class: 'row', style: 'margin:10px 0;align-items:center' },
+      el('button', { class: 'small', onclick: () => nav(-7) }, '‹ 7 jours'),
+      el('button', { class: 'small', onclick: () => go({ ...p, fc_from: '', fc_to: '' }) }, 'Aujourd\'hui'),
+      el('button', { class: 'small', onclick: () => nav(7) }, '7 jours ›'),
+      el('span', { class: 'muted small' }, `Du ${d(f.from)} au ${d(f.to)}`
+        + (f.reel_connu_jusquau ? ` · réel connu jusqu'au ${d(f.reel_connu_jusquau)} (relevés importés)` : ' · aucun relevé bancaire sur la période'))),
+    el('div', { class: 'kpis' },
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Attendu après aujourd\'hui'), el('div', { class: 'v' }, money(t.prevu_a_venir, 'EUR'))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Prévu (jours au réel connu)'), el('div', { class: 'v' }, money(t.prevu_connu, 'EUR'))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Reçu en banque'), el('div', { class: 'v' }, money(t.reel, 'EUR'))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Écart reçu − prévu'), el('div', { class: 'v ' + fcEcartClass(ecartConnu, t.prevu_connu) }, money(ecartConnu, 'EUR')))));
+  if (!provs.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucune règle de prévisionnel.')); return; }
+  const head = el('tr', {}, el('th', {}, 'Jour bancaire'),
+    provs.map(x => el('th', { class: 'num' }, x.label, FC_QUALITY[x.quality] ? el('div', {}, el('span', { class: 'badge ' + FC_QUALITY[x.quality][1] }, FC_QUALITY[x.quality][0])) : null)),
+    el('th', { class: 'num' }, 'Total'));
+  const cell = (c, connu) => {
+    if (!c) return el('td', { class: 'num' }, '');
+    const parts = [];
+    if (c.prevu || (connu && c.reel)) parts.push(el('div', {}, c.prevu ? money(c.prevu) : el('span', { class: 'muted' }, '—'),
+      c.source === 'versement' ? el('span', { class: 'fc-tag', title: 'Versement annoncé par le prestataire (remplace l\'estimation ' + money(c.estime) + ')' }, ' annoncé') : null));
+    if (connu && (c.reel || c.prevu)) parts.push(el('div', { class: 'small ' + fcEcartClass(c.ecart, c.prevu) }, `reçu ${money(c.reel)}`, c.ecart ? ` (${c.ecart > 0 ? '+' : ''}${money(c.ecart)})` : ''));
+    return el('td', { class: 'num' }, parts);
+  };
+  const rows = f.days.map(dd => el('tr', { class: [dd.date === f.today ? 'fc-today' : '', dd.ouvre ? '' : 'fc-off'].join(' ').trim() || null },
+    el('td', { class: 'nowrap' }, `${FC_DOW[dd.dow]} ${d(dd.date)}`, dd.ferie ? el('div', { class: 'small muted' }, 'férié') : (!dd.ouvre ? el('div', { class: 'small muted' }, 'non ouvré') : null),
+      dd.date === f.today ? el('div', { class: 'small' }, 'aujourd\'hui') : null),
+    provs.map(x => cell(dd.cells[x.code], dd.reel_connu)),
+    el('td', { class: 'num' }, el('strong', {}, dd.total_prevu ? money(dd.total_prevu) : '—'),
+      dd.reel_connu && (dd.total_reel || dd.total_prevu) ? el('div', { class: 'small ' + fcEcartClass(dd.ecart, dd.total_prevu) }, `reçu ${money(dd.total_reel)}`) : null)));
+  body.appendChild(el('div', { class: 'table-wrap' }, el('table', { class: 'fc-table' }, el('thead', {}, head), el('tbody', {}, rows))));
+  body.appendChild(el('div', { class: 'small muted', style: 'margin-top:6px' },
+    'Couleurs de l\'écart : vert = conforme (5 % ou 50 € près), rouge = reçu en moins, orange = reçu en plus. « annoncé » : montant du versement annoncé par le prestataire.'));
+
+  // Tableau des délais : jour de commande → jour d'arrivée en banque (règles en vigueur la semaine de référence).
+  const dl = f.delais || { lignes: [] };
+  body.appendChild(el('h3', {}, `Délais de paiement (ventes de la semaine du ${d(dl.semaine)})`));
+  body.appendChild(el('div', { class: 'table-wrap' }, el('table', { class: 'fc-delays' },
+    el('thead', {}, el('tr', {}, el('th', {}, 'Commande le'), provs.map(x => el('th', {}, x.label)))),
+    el('tbody', {}, dl.lignes.map(l => el('tr', {}, el('td', { class: 'nowrap' }, `${FC_DOW_LONG[l.dow]} ${fcShort(l.date)}`),
+      provs.map(x => el('td', { class: 'small nowrap' }, ((l.cells || {})[x.code] || []).map(q => el('div', {},
+        (q.share < 1 ? `${Math.round(q.share * 100)} % ` : '') + `${FC_DOW[new Date(q.jour + 'T12:00:00Z').getUTCDay() || 7]} ${fcShort(q.jour)} (J+${q.n})`))))))))));
+  const notes = f.rules.filter(r => r.note);
+  if (notes.length) body.appendChild(el('details', { style: 'margin-top:10px' }, el('summary', { class: 'small muted' }, 'Règles appliquées'),
+    el('ul', { class: 'small' }, notes.map(r => el('li', {}, el('strong', {}, r.provider_label), r.valid_from || r.valid_to ? ` (ventes ${r.valid_from ? 'du ' + d(r.valid_from) : ''}${r.valid_to ? ' au ' + d(r.valid_to) : ''})` : '', ' — ', r.note)))));
+}
+
+// Paramètres : règles du prévisionnel (administrateurs). Taux saisis en %, stockés en fraction.
+async function pspForecastRulesSettings(body) {
+  let f;
+  try { f = await api('GET', '/api/psp/forecast?' + qs({ rules_only: '1' })); } catch (e) { return; }
+  const admin = isAdmin();
+  const MODES = { jours: 'J + n jours', hebdo: 'hebdomadaire', mensuel: 'mensuel' };
+  const pctOut = v => (v === null || v === undefined) ? '' : String(Math.round(Number(v) * 100000) / 1000).replace('.', ',');
+  body.append(el('h3', {}, 'Prévisionnel : délais et frais par prestataire'),
+    el('p', { class: 'small muted' }, 'Mode « J + n » : arrivée au jour ouvré suivant la vente + n jours. Hebdomadaire : ventes de la semaine (lundi → dimanche) versées le jour indiqué de la semaine suivante (1 = lundi). ',
+      'Mensuel : ventes du mois versées le jour indiqué du mois suivant. Montant attendu = brut × part versée − brut × frais. Les dates de validité portent sur la date de vente (bascule PayPal).'));
+  body.appendChild(el('div', { class: 'table-wrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, ['Prestataire', 'Part', 'Ventes du', 'au', 'Mode', 'n jours', 'Jour sem.', 'Jour mois', 'Part versée (%)', 'Frais (%)', 'Qualité', ''].map(h => el('th', {}, h)))),
+    el('tbody', {}, f.rules.map(r => {
+      const i = {};
+      const inp = (k, val, w, type) => (i[k] = el('input', { value: val === null || val === undefined ? '' : val, style: `width:${w}px`, type: type || null, disabled: admin ? null : true }));
+      const sel = (k, opts, val) => { const s = el('select', { disabled: admin ? null : true }, Object.entries(opts).map(([v, l]) => el('option', { value: v, selected: v === val ? 'selected' : null }, l))); i[k] = s; return s; };
+      const orig = { valid_from: r.valid_from || '', valid_to: r.valid_to || '', mode: r.mode, delay_days: String(r.delay_days), weekday: r.weekday === null ? '' : String(r.weekday),
+        month_day: r.month_day === null ? '' : String(r.month_day), share: pctOut(r.share), fee_rate: pctOut(r.fee_rate), quality: r.quality };
+      return el('tr', { title: r.note || '' }, el('td', {}, r.provider_label), el('td', {}, r.part),
+        el('td', {}, inp('valid_from', orig.valid_from, 130, 'date')), el('td', {}, inp('valid_to', orig.valid_to, 130, 'date')),
+        el('td', {}, sel('mode', MODES, r.mode)), el('td', {}, inp('delay_days', orig.delay_days, 50)), el('td', {}, inp('weekday', orig.weekday, 40)),
+        el('td', {}, inp('month_day', orig.month_day, 40)), el('td', {}, inp('share', orig.share, 60)), el('td', {}, inp('fee_rate', orig.fee_rate, 60)),
+        el('td', {}, sel('quality', { mesure: 'mesurée', estimation: 'estimation', hypothese: 'hypothèse' }, r.quality)),
+        el('td', {}, admin ? el('button', { class: 'small', onclick: () => {
+          const ch = {};
+          for (const [k, x] of Object.entries(i)) if (String(x.value).trim() !== orig[k]) ch[k] = String(x.value).trim();
+          for (const k of ['share', 'fee_rate']) if (ch[k] !== undefined) {
+            const v = Number(ch[k].replace(',', '.'));
+            if (ch[k] === '' || isNaN(v)) return toast('Taux invalide', true);
+            ch[k] = String(Math.round(v * 1000) / 100000);
+          }
+          if (!Object.keys(ch).length) return toast('Aucune modification');
+          act(() => api('POST', `/api/psp/forecast-rules/${r.id}`, ch), 'Règle enregistrée').then(render);
+        } }, 'Enregistrer') : null));
+    })))));
 }

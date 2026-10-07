@@ -132,6 +132,13 @@ tr.click { cursor: pointer; } tr.click:hover td { background: #f7f9fc; }
 .psp-step { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; background: #fbfcfe; min-width: 0; }
 .psp-step-h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 @media (max-width: 1100px) { .psp-steps { grid-template-columns: 1fr; } }
+.fc-table td, .fc-table th { padding-top: 5px; padding-bottom: 5px; }
+.fc-table tr.fc-off td { background: #fafbfc; color: var(--muted); }
+.fc-table tr.fc-today td { background: var(--brand-soft); }
+.fc-ok { color: var(--ok); } .fc-warn { color: var(--warn); } .fc-bad { color: var(--bad); }
+.kpi .v.fc-ok { color: var(--ok); } .kpi .v.fc-warn { color: var(--warn); } .kpi .v.fc-bad { color: var(--bad); }
+.fc-tag { font-size: 11px; color: var(--info); }
+.fc-delays td, .fc-delays th { vertical-align: top; }
 .progress-banner { border-left: 4px solid var(--brand); }
 .progress-banner .progress-link { display: block; color: inherit; padding: 6px 0; }
 .progress-banner .progress-link:hover { text-decoration: none; background: var(--line2); }
