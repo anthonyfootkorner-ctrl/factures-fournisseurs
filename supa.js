@@ -56,7 +56,43 @@ const SB = (() => {
     if (!r.ok) throw new Error(j.message || j.error || 'Fichier inaccessible');
     return `${C.url}/storage/v1${j.signedURL}` + (download ? `&download=${encodeURIComponent(download === true ? '' : download)}` : '');
   }
+  // Gros fichiers : envoi par morceaux de 6 Mo (protocole TUS de Supabase), reprise automatique en cas de coupure.
+  async function uploadResumable(bucket, path, file, onProgress) {
+    const CHUNK = 6 * 1024 * 1024;
+    const b64 = x => btoa(unescape(encodeURIComponent(x)));
+    const r = await fetch(`${C.url}/storage/v1/upload/resumable`, { method: 'POST', headers: await headers({
+      'Tus-Resumable': '1.0.0', 'Upload-Length': String(file.size), 'x-upsert': 'false',
+      'Upload-Metadata': `bucketName ${b64(bucket)},objectName ${b64(path)},contentType ${b64(file.type || 'application/octet-stream')}` }) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 413) throw new Error('fichier plus gros que la limite de stockage autorisée par Supabase (un administrateur peut la relever dans Supabase › Storage › Settings)');
+      throw new Error('Envoi refusé : ' + (j.message || j.error || r.status));
+    }
+    let loc = r.headers.get('Location');
+    if (!loc) throw new Error('Envoi par morceaux indisponible');
+    if (loc.startsWith('/')) loc = C.url + loc;
+    let offset = 0;
+    while (offset < file.size) {
+      let ok = false;
+      for (let attempt = 0; attempt < 5 && !ok; attempt++) {
+        try {
+          const p = await fetch(loc, { method: 'PATCH', headers: await headers({ 'Tus-Resumable': '1.0.0', 'Upload-Offset': String(offset),
+            'Content-Type': 'application/offset+octet-stream' }), body: file.slice(offset, offset + CHUNK) });
+          if (!p.ok) throw new Error('HTTP ' + p.status);
+          offset = Number(p.headers.get('Upload-Offset')) || Math.min(file.size, offset + CHUNK);
+          ok = true;
+        } catch (e) {
+          if (attempt === 4) throw new Error('Envoi interrompu (' + e.message + ') : relancez le dépôt');
+          await new Promise(res => setTimeout(res, 2000 * (attempt + 1)));
+          const h = await fetch(loc, { method: 'HEAD', headers: await headers({ 'Tus-Resumable': '1.0.0' }) }).catch(() => null);
+          if (h && h.ok && h.headers.get('Upload-Offset')) offset = Number(h.headers.get('Upload-Offset'));
+        }
+      }
+      if (onProgress) onProgress(offset / file.size);
+    }
+  }
   function upload(bucket, path, file, onProgress) {
+    if (file.size > 6 * 1024 * 1024) return uploadResumable(bucket, path, file, onProgress);
     return headers({}).then(h => new Promise((res, rej) => {
       const x = new XMLHttpRequest();
       x.open('POST', `${C.url}/storage/v1/object/${bucket}/${enc(path)}`);
@@ -169,6 +205,14 @@ async function apiRoute(method, url, body) {
   }
   if (method === 'POST' && R(/^\/api\/admin\/demo$/)) return SB.rpc(body.action === 'load' ? 'demo_load' : 'demo_clear');
   if (method === 'GET' && R(/^\/api\/audit$/)) return SB.rpc('audit_list', { p_entity: q.entity || null });
+  if (method === 'GET' && R(/^\/api\/bank$/)) return SB.rpc('bank_list', { p: q });
+  if (method === 'GET' && R(/^\/api\/bank\/(\d+)\/suggestions$/)) return SB.rpc('bank_suggestions', { p_tx: +m[1] });
+  if (method === 'POST' && R(/^\/api\/bank\/(\d+)\/reconcile$/)) return SB.rpc('bank_reconcile', { p_tx: +m[1], p_alloc: body.alloc, p_validate: !!body.validate, p_comment: body.comment || null });
+  if (method === 'POST' && R(/^\/api\/bank\/(\d+)\/unreconcile$/)) return SB.rpc('bank_unreconcile', { p_tx: +m[1] });
+  if (method === 'POST' && R(/^\/api\/bank\/(\d+)\/status$/)) return SB.rpc('bank_set_status', { p_tx: +m[1], p_status: body.status, p_category: body.category || null, p_note: body.note || null });
+  if (method === 'POST' && R(/^\/api\/bank\/reconcile-sure$/)) return SB.rpc('bank_reconcile_sure', { p_ids: body.ids });
+  if (method === 'PATCH' && R(/^\/api\/bank-accounts\/(\d+)$/)) return SB.rpc('bank_account_update', { p_id: +m[1], p: body });
+  if (method === 'GET' && R(/^\/api\/treasury$/)) return SB.rpc('treasury', { p_demo: demo });
   throw new Error('Route inconnue : ' + method + ' ' + path);
 }
 

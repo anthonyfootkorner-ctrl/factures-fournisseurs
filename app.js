@@ -125,7 +125,7 @@ function changeOwnPassword() {
 // ------------------------------------------------------------------ squelette & routage
 const NAV = [
   ['#/', 'Tableau de bord'], ['#/factures', 'Factures'], ['#/a-verifier', 'À vérifier'],
-  ['#/fournisseurs', 'Fournisseurs'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
+  ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
 ];
 let reviewCount = null;
 
@@ -184,6 +184,7 @@ async function render() {
     else if (parts[0] === 'imports' && parts[1]) await viewBatch(view, +parts[1]);
     else if (parts[0] === 'imports') await viewImports(view);
     else if (parts[0] === 'parametres') await viewSettings(view);
+    else if (parts[0] === 'banque') await viewBank(view);
     else view.appendChild(el('p', {}, 'Page introuvable'));
   } catch (e) { view.appendChild(el('div', { class: 'callout bad' }, e.message)); }
 }
@@ -288,12 +289,16 @@ async function viewDashboard(view) {
   const curs = Object.keys(data.currencies);
   if (!curs.length) { view.appendChild(el('div', { class: 'panel empty' }, 'Aucune facture pour ces filtres. Commencez par un import.')); return; }
   if (curs.length > 1) view.appendChild(el('div', { class: 'callout info' }, `Plusieurs devises (${curs.join(', ')}) : les totaux sont présentés séparément, sans conversion.`));
+  const treso = await api('GET', '/api/treasury?' + qs({})).catch(() => ({}));
   for (const cur of curs) {
     const c = data.currencies[cur];
+    const tr = treso[cur];
     const box = el('section', {});
     if (curs.length > 1) box.appendChild(el('h2', {}, 'Devise : ' + cur));
     const kpi = (lab, v, sub, cls, href) => el('div', { class: 'kpi ' + (cls || '') }, el('a', { href: href || null }, el('div', { class: 'l' }, lab), el('div', { class: 'v' }, money(v, cur)), sub ? el('div', { class: 's' }, sub) : null));
     box.appendChild(el('div', { class: 'kpis' },
+      tr ? kpi('Trésorerie (derniers soldes connus)', tr.solde, `${tr.comptes} compte(s), au ${d(tr.date_max)}${tr.date_min !== tr.date_max ? ' (le plus ancien : ' + d(tr.date_min) + ')' : ''}`, 'ok', '#/banque') : null,
+      tr ? kpi('Trésorerie après retards et échéances ≤ 30 j', tr.solde - c.en_retard.montant - c.echeance_30j.montant, 'factures connues uniquement (validées et à vérifier)', tr.solde - c.en_retard.montant - c.echeance_30j.montant < 0 ? 'bad' : '', '#/banque') : null,
       kpi('Total restant à payer', c.restant.montant, `${c.restant.n} facture(s)`, '', link({ open: '1', doc_type: 'facture' })),
       kpi('dont validé', c.restant_valide.montant, `${c.restant_valide.n} facture(s)`, 'ok', link({ open: '1', doc_type: 'facture', validation: 'validee' })),
       kpi('dont à vérifier', c.restant_a_verifier.montant, `${c.restant_a_verifier.n} facture(s)`, 'warn', link({ open: '1', doc_type: 'facture', validation: 'a_verifier' })),
@@ -785,42 +790,47 @@ function bankModal(s) {
 }
 
 // ------------------------------------------------------------------ imports
+// Zone de dépôt réutilisable (imports de factures, relevés bancaires) : envoi dans le stockage privé puis traitement par le poste de traitement.
+function uploadPanel(o) {
+  const label = el('input', { placeholder: o.placeholder || 'Libellé du lot (facultatif), ex. « Factures septembre »', value: o.label || '' });
+  const fileInput = el('input', { type: 'file', multiple: true, accept: o.accept || '.pdf,.xlsx,.xls,.csv,.zip,.jpg,.jpeg,.png', style: 'display:none' });
+  const list = el('div');
+  const drop = el('div', { class: 'drop', onclick: () => fileInput.click() }, el('strong', {}, o.title || 'Déposez vos factures ici ou cliquez pour choisir'),
+    o.hint || 'PDF (y compris scannés), Excel XLSX/XLS, CSV, images JPG/PNG — plusieurs fichiers à la fois — ou une archive ZIP complète (sous-dossiers compris, jusqu\'à 2 Go)');
+  const start = async files => {
+    if (!files.length) return;
+    const b = await act(() => api('POST', '/api/batches', { label: label.value }));
+    list.replaceChildren();
+    const rows = [...files].map(f => { const bar = el('div', { style: 'width:0%' }); const st = el('span', { class: 'small muted' }, 'en attente d\'envoi');
+      list.appendChild(el('div', { class: 'row', style: 'align-items:center;margin:4px 0' }, el('span', { class: 'grow' }, f.name), el('div', { class: 'progress', style: 'width:180px' }, bar), st)); return { f, bar, st }; });
+    for (const r of rows) {
+      try {
+        const isZip = /\.zip$/i.test(r.f.name);
+        if (isZip && r.f.size > 2000 * 1024 * 1024) throw new Error('archive trop volumineuse (2 Go maximum)');
+        if (!isZip && r.f.size > 100 * 1024 * 1024) throw new Error('fichier trop volumineux (regroupez les gros volumes dans une archive ZIP)');
+        const path = `${b.id}/${uuid()}_${safeKey(r.f.name)}`;
+        await SB.upload('depots', path, r.f, x => { r.bar.style.width = (x * 100) + '%'; });
+        await SB.rpc('import_register', { p_batch: b.id, p_path: path, p_filename: r.f.name, p_size: r.f.size });
+        r.st.textContent = 'reçu';
+      } catch (e) { r.st.textContent = 'refusé : ' + e.message; }
+      r.bar.style.width = '100%';
+    }
+    location.hash = '#/imports/' + b.id;
+  };
+  fileInput.addEventListener('change', () => start(fileInput.files));
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); start(e.dataTransfer.files); });
+  return el('div', { class: 'panel' }, el('label', { class: 'f', style: 'margin-bottom:10px' }, 'Lot', label), drop, fileInput, list,
+    el('p', { class: 'small muted' }, o.note || 'Les fichiers sont contrôlés (format réel, taille, archives piégées) puis traités en arrière-plan : une erreur sur un fichier ne bloque pas les autres. Le contenu des documents est traité comme une donnée, jamais exécuté.'));
+}
+
 async function viewImports(view) {
   view.appendChild(el('h1', {}, 'Imports'));
   const ws = workerState(S.lookups.worker_last_seen);
   view.appendChild(el('div', { class: 'callout ' + (ws.ok ? 'info' : '') }, 'Poste de traitement (lecture des factures) : ', el('span', { class: 'badge ' + ws.cls }, ws.label),
     ws.ok ? '' : ' — les fichiers déposés sont conservés et seront traités dès que le poste sera de nouveau allumé.'));
-  if (canWrite() && !S.demo) {
-    const label = el('input', { placeholder: 'Libellé du lot (facultatif), ex. « Factures septembre »' });
-    const fileInput = el('input', { type: 'file', multiple: true, accept: '.pdf,.xlsx,.xls,.csv,.zip,.jpg,.jpeg,.png', style: 'display:none' });
-    const list = el('div');
-    const drop = el('div', { class: 'drop', onclick: () => fileInput.click() }, el('strong', {}, 'Déposez vos factures ici ou cliquez pour choisir'),
-      'PDF (y compris scannés), Excel XLSX/XLS, CSV, ZIP (avec sous-dossiers), images JPG/PNG — plusieurs fichiers à la fois');
-    const start = async files => {
-      if (!files.length) return;
-      const b = await act(() => api('POST', '/api/batches', { label: label.value }));
-      list.replaceChildren();
-      const rows = [...files].map(f => { const bar = el('div', { style: 'width:0%' }); const st = el('span', { class: 'small muted' }, 'en attente d\'envoi');
-        list.appendChild(el('div', { class: 'row', style: 'align-items:center;margin:4px 0' }, el('span', { class: 'grow' }, f.name), el('div', { class: 'progress', style: 'width:180px' }, bar), st)); return { f, bar, st }; });
-      for (const r of rows) {
-        try {
-          if (r.f.size > 100 * 1024 * 1024) throw new Error('fichier trop volumineux');
-          const path = `${b.id}/${uuid()}_${safeKey(r.f.name)}`;
-          await SB.upload('depots', path, r.f, x => { r.bar.style.width = (x * 100) + '%'; });
-          await SB.rpc('import_register', { p_batch: b.id, p_path: path, p_filename: r.f.name, p_size: r.f.size });
-          r.st.textContent = 'reçu';
-        } catch (e) { r.st.textContent = 'refusé : ' + e.message; }
-        r.bar.style.width = '100%';
-      }
-      location.hash = '#/imports/' + b.id;
-    };
-    fileInput.addEventListener('change', () => start(fileInput.files));
-    drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
-    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-    drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); start(e.dataTransfer.files); });
-    view.appendChild(el('div', { class: 'panel' }, el('label', { class: 'f', style: 'margin-bottom:10px' }, 'Lot', label), drop, fileInput, list,
-      el('p', { class: 'small muted' }, 'Les fichiers sont contrôlés (format réel, taille, archives piégées) puis traités en arrière-plan : une erreur sur un fichier ne bloque pas les autres. Le contenu des documents est traité comme une donnée, jamais exécuté.')));
-  }
+  if (canWrite() && !S.demo) view.appendChild(uploadPanel({}));
   const batches = await api('GET', '/api/batches?' + qs({}));
   view.appendChild(el('div', { class: 'panel table-wrap' }, el('h2', {}, 'Lots importés'), el('table', {}, el('thead', {}, el('tr', {}, ['Lot', 'Libellé', 'Date', 'Par', 'Fichiers', 'En cours', 'Erreurs', 'Doublons', 'À mapper', 'Factures'].map(h => el('th', {}, h)))),
     el('tbody', {}, batches.length ? batches.map(b => el('tr', { class: 'click', onclick: () => { location.hash = '#/imports/' + b.id; } }, el('td', {}, '#' + b.id), el('td', {}, b.label || '—'), el('td', {}, dt(b.created_at)), el('td', {}, b.user_name || '—'),
@@ -898,12 +908,13 @@ async function viewSettings(view) {
     const tol = el('input', { type: 'number', min: 0, value: st.amount_tolerance_cents, disabled: ro ? true : null });
     const fdm = el('select', { disabled: ro ? true : null }, [['date_plus_n_puis_fdm', 'Date + N jours, puis fin de mois (usage courant)'], ['fdm_puis_n', 'Fin de mois, puis + N jours']].map(([v, l]) => el('option', { value: v, selected: st.due_fdm_method === v ? 'selected' : null }, l)));
     const auto = el('select', { disabled: ro ? true : null }, [['0', 'Non : toute facture passe par « À vérifier »'], ['1', 'Oui : valider automatiquement les factures sans aucune anomalie']].map(([v, l]) => el('option', { value: v, selected: st.auto_validate_clean === v ? 'selected' : null }, l)));
-    const lim = { max_upload_mb: el('input', { type: 'number', value: st.max_upload_mb }), zip_max_entries: el('input', { type: 'number', value: st.zip_max_entries }), zip_max_total_mb: el('input', { type: 'number', value: st.zip_max_total_mb }), zip_max_ratio: el('input', { type: 'number', value: st.zip_max_ratio }) };
+    const lim = { max_upload_mb: el('input', { type: 'number', value: st.max_upload_mb }), zip_max_upload_mb: el('input', { type: 'number', value: st.zip_max_upload_mb, max: 2000 }), zip_max_entries: el('input', { type: 'number', value: st.zip_max_entries }), zip_max_total_mb: el('input', { type: 'number', value: st.zip_max_total_mb }), zip_max_ratio: el('input', { type: 'number', value: st.zip_max_ratio }) };
     p.append(el('h2', {}, 'Règles de contrôle'), el('div', { class: 'fields' },
       el('div', { class: 'lab' }, 'Tolérance d\'arrondi HT + TVA = TTC (centimes)'), el('div', { class: 'val' }, tol),
       el('div', { class: 'lab' }, 'Calcul « N jours fin de mois »'), el('div', { class: 'val' }, fdm),
       el('div', { class: 'lab' }, 'Validation automatique'), el('div', { class: 'val' }, auto),
       el('div', { class: 'lab' }, 'Taille max. d\'un fichier (Mo)'), el('div', { class: 'val' }, lim.max_upload_mb),
+      el('div', { class: 'lab' }, 'ZIP : taille max. de l\'archive (Mo, 2000 au plus)'), el('div', { class: 'val' }, lim.zip_max_upload_mb),
       el('div', { class: 'lab' }, 'ZIP : nombre max. de fichiers'), el('div', { class: 'val' }, lim.zip_max_entries),
       el('div', { class: 'lab' }, 'ZIP : taille décompressée max. (Mo)'), el('div', { class: 'val' }, lim.zip_max_total_mb),
       el('div', { class: 'lab' }, 'ZIP : taux de compression max.'), el('div', { class: 'val' }, lim.zip_max_ratio)),
@@ -969,4 +980,144 @@ async function viewSettings(view) {
         el('td', {}, h.entity === 'invoice' ? el('a', { href: '#/factures/' + h.entity_id }, 'facture #' + h.entity_id) : h.entity === 'supplier' ? el('a', { href: '#/fournisseurs/' + h.entity_id }, 'fournisseur #' + h.entity_id) : `${h.entity} ${h.entity_id ? '#' + h.entity_id : ''}`),
         el('td', {}, h.action.replace(/_/g, ' ')), el('td', {}, h.field || ''), el('td', { class: 'mono' }, h.old_value ?? ''), el('td', { class: 'mono' }, h.new_value ?? '')))))));
   }
+}
+
+// ------------------------------------------------------------------ banque : relevés et rapprochement
+const BANK_STATUS = { a_rapprocher: ['À rapprocher', 'b-warn'], partielle: ['Partiellement rapprochée', 'b-info'], rapprochee: ['Rapprochée', 'b-ok'],
+  ignoree: ['Hors factures', ''], encaissement: ['Encaissement', ''] };
+const BANK_CATEGORIES = ['Frais bancaires', 'Virement interne', 'Salaires', 'Échéance de prêt', 'Charges sociales et fiscales', 'Dépenses carte (relevé)',
+  'Impayé client (prélèvement rejeté)', 'Remboursement / avance', 'Autre opération sans facture fournisseur'];
+const CONF = { sure: ['sûre', 'b-ok'], probable: ['probable', 'b-info'], possible: ['possible', ''] };
+
+async function viewBank(view) {
+  const p = Object.assign({ status: 'a_rapprocher,partielle', sens: 'debit', page: 1 }, getHashParams());
+  const go = np => { location.hash = '#/banque?' + new URLSearchParams(np); };
+  const data = await api('GET', '/api/bank?' + qs({ ...p, per_page: 50 }));
+  view.appendChild(el('h1', {}, 'Banque — rapprochement des règlements'));
+  view.appendChild(el('p', { class: 'muted' }, 'Les débits des relevés sont comparés aux factures ouvertes (montant, fournisseur et référence dans le libellé, échéance). ',
+    'Un rapprochement validé crée le règlement de la facture ; rien n\'est jamais marqué payé automatiquement. Les encaissements, virements internes, frais et prêts sont classés à part (réversible).'));
+  // Comptes
+  const acc = data.accounts;
+  const tot = acc.filter(a => a.balance !== null).reduce((s, a) => s + a.balance, 0);
+  view.appendChild(el('div', { class: 'panel table-wrap' }, el('h2', {}, `Comptes (${acc.length}) — trésorerie connue : ${money(tot, 'EUR')}`),
+    acc.length ? el('table', {}, el('thead', {}, el('tr', {}, ['Banque', 'Compte', 'N°', 'Société', 'Solde', 'Au', 'Opérations', 'À rapprocher', 'Période'].map((h, i) => el('th', { class: [4, 6, 7].includes(i) ? 'num' : '' }, h)))),
+      el('tbody', {}, acc.map(a => el('tr', { class: 'click', onclick: () => go({ ...p, account_id: a.id, page: 1 }) },
+        el('td', {}, a.bank || '—'), el('td', {}, a.label || '—'), el('td', { class: 'mono' }, (a.account_number || '').slice(-11)), el('td', { class: 'small' }, a.company_name || '—'),
+        el('td', { class: 'num' }, money(a.balance, a.currency)), el('td', {}, d(a.balance_date)), el('td', { class: 'num' }, a.n_tx),
+        el('td', { class: 'num' }, a.n_open ? el('span', { class: 'badge b-warn' }, a.n_open) : '0'),
+        el('td', { class: 'small' }, a.first_date ? `${d(a.first_date)} → ${d(a.last_date)}` : 'soldes seuls')))))
+      : el('div', { class: 'empty' }, 'Aucun relevé importé.')));
+  if (canWrite() && !S.demo) view.appendChild(uploadPanel({ title: 'Déposez vos relevés bancaires', label: 'Relevés bancaires',
+    hint: 'Exports CIC (Excel), Crédit Agricole (Excel), Société Générale (CSV)… Un relevé qui recouvre une période déjà importée n\'ajoute que les opérations nouvelles.',
+    accept: '.xlsx,.xls,.csv', note: 'Les relevés sont lus par le poste de traitement comme les factures ; ils restent privés.' }));
+  // Filtres
+  const c = data.compteurs || {};
+  const tabs = el('div', { class: 'tabs' }, [['a_rapprocher,partielle', `À rapprocher (${(c.a_rapprocher || 0) + (c.partielle || 0)})`], ['rapprochee', `Rapprochées (${c.rapprochee || 0})`],
+    ['ignoree', `Hors factures (${c.ignoree || 0})`], ['encaissement', `Encaissements (${c.encaissement || 0})`], ['', 'Tout']]
+    .map(([v, l]) => el('button', { class: (p.status || '') === v ? 'on' : '', onclick: () => go({ ...p, status: v, sens: v === 'encaissement' ? '' : p.sens, page: 1 }) }, l)));
+  const search = el('input', { type: 'search', placeholder: 'Libellé, fournisseur, nature…', value: p.search || '' });
+  const accSel = el('select', {}, el('option', { value: '' }, 'Tous les comptes'), acc.map(a => el('option', { value: a.id, selected: String(p.account_id) === String(a.id) ? 'selected' : null }, `${a.bank || ''} ${a.label || a.account_number}`)));
+  const from = el('input', { type: 'date', value: p.from || '' }), to = el('input', { type: 'date', value: p.to || '' });
+  const sens = el('select', {}, [['debit', 'Débits'], ['credit', 'Crédits'], ['', 'Débits et crédits']].map(([v, l]) => el('option', { value: v, selected: (p.sens || '') === v ? 'selected' : null }, l)));
+  const apply = () => go({ ...p, search: search.value, account_id: accSel.value, from: from.value, to: to.value, sens: sens.value, page: 1 });
+  search.addEventListener('keydown', e => e.key === 'Enter' && apply());
+  [accSel, from, to, sens].forEach(x => x.addEventListener('change', apply));
+  const rows = data.rows;
+  const sureIds = rows.filter(r => r.suggestions[0] && r.suggestions[0].confiance === 'sure' && r.suggestions[0].type === 'facture' && r.suggestions[0].invoices[0].validation_status === 'validee').map(r => r.id);
+  view.appendChild(el('div', { class: 'panel' }, tabs, el('div', { class: 'row' }, el('label', { class: 'f grow' }, 'Recherche', search), el('label', { class: 'f' }, 'Compte', accSel),
+    el('label', { class: 'f' }, 'Du', from), el('label', { class: 'f' }, 'au', to), el('label', { class: 'f' }, 'Sens', sens),
+    canWrite() && sureIds.length ? el('button', { class: 'primary', onclick: () => confirmBox('Valider les correspondances sûres',
+      `${sureIds.length} opération(s) de cette page ont une correspondance sûre avec une facture déjà validée (montant exact + fournisseur ou référence). Créer les règlements correspondants ?`,
+      'Valider', () => act(() => api('POST', '/api/bank/reconcile-sure', { ids: sureIds })).then(r => { toast(`${r.done} rapprochement(s) créé(s)`); render(); }), 'primary') }, `Valider les ${sureIds.length} correspondances sûres`) : null)));
+  // Opérations
+  const tbody = el('tbody', {}, rows.length ? rows.map(r => bankRow(r)) : el('tr', {}, el('td', { colspan: 6, class: 'empty' }, 'Aucune opération.')));
+  const pages = Math.max(1, Math.ceil(data.total / data.per_page));
+  view.appendChild(el('div', { class: 'panel table-wrap' }, el('div', { class: 'muted', style: 'margin-bottom:6px' }, `${data.total} opération(s)`),
+    el('table', {}, el('thead', {}, el('tr', {}, ['Date', 'Compte', 'Libellé', 'Montant', 'Statut', 'Factures proposées / rapprochées'].map((h, i) => el('th', { class: i === 3 ? 'num' : '' }, h)))), tbody),
+    el('div', { class: 'pager' }, el('button', { disabled: data.page <= 1 ? true : null, onclick: () => go({ ...p, page: data.page - 1 }) }, '‹ Précédent'),
+      el('span', {}, `Page ${data.page} / ${pages}`), el('button', { disabled: data.page >= pages ? true : null, onclick: () => go({ ...p, page: data.page + 1 }) }, 'Suivant ›'))));
+}
+
+function bankRow(r) {
+  const st = BANK_STATUS[r.status] || [r.status, ''];
+  const right = el('td', {});
+  if (r.payments.length) right.appendChild(el('div', {}, r.payments.map(pm => el('div', { class: 'small' }, '✓ ', el('a', { href: '#/factures/' + pm.invoice_id }, `${pm.supplier_name || ''} ${pm.reference || '#' + pm.invoice_id}`), ' — ', money(pm.amount)))));
+  if (['a_rapprocher', 'partielle'].includes(r.status) && r.amount < 0) {
+    const s = r.suggestions;
+    if (s.length) {
+      const best = s[0];
+      const conf = CONF[best.confiance] || [best.confiance, ''];
+      right.append(el('div', {}, el('span', { class: 'badge ' + conf[1] }, conf[0]), ' ', el('span', { class: 'small muted' }, best.raisons.join(' · '))),
+        el('div', { class: 'small' }, best.invoices.slice(0, 6).map(i => el('div', {}, el('a', { href: '#/factures/' + i.id }, `${i.supplier_name || ''} ${i.reference || '#' + i.id}`),
+          ` — ${money(i.amount)}` + (i.due_date ? ` · éch. ${d(i.due_date)}` : '') + (i.validation_status !== 'validee' ? ' · à vérifier' : ''))),
+          best.invoices.length > 6 ? el('div', { class: 'muted' }, `… et ${best.invoices.length - 6} autre(s)`) : null));
+      if (canWrite()) right.appendChild(el('div', { class: 'row', style: 'margin-top:4px' },
+        el('button', { class: 'small primary', onclick: () => reconcileModal(r, best.invoices) }, 'Valider…'),
+        s.length > 1 ? el('button', { class: 'small', onclick: () => reconcileModal(r, null, s) }, `Autres propositions (${s.length - 1})`) : null,
+        el('button', { class: 'small', onclick: () => reconcileModal(r, []) }, 'Choisir'), el('button', { class: 'small', onclick: () => ignoreModal(r) }, 'Hors factures')));
+    } else {
+      right.appendChild(el('div', { class: 'small muted' }, 'Aucune facture correspondante trouvée.'));
+      if (canWrite()) right.appendChild(el('div', { class: 'row', style: 'margin-top:4px' }, el('button', { class: 'small', onclick: () => reconcileModal(r, []) }, 'Choisir des factures'),
+        el('button', { class: 'small', onclick: () => ignoreModal(r) }, 'Hors factures')));
+    }
+  } else if (canWrite()) {
+    if (r.status === 'rapprochee' || r.status === 'partielle') right.appendChild(el('button', { class: 'small danger', onclick: () => confirmBox('Annuler le rapprochement',
+      'Les règlements créés par ce rapprochement seront supprimés (opération historisée).', 'Annuler le rapprochement', () => act(() => api('POST', `/api/bank/${r.id}/unreconcile`)).then(render)) }, 'Annuler le rapprochement'));
+    if (r.status === 'ignoree' || r.status === 'encaissement') right.appendChild(el('div', {}, el('span', { class: 'small muted' }, (r.category || '') + (r.auto ? ' (classement automatique)' : '')), ' ',
+      el('button', { class: 'small', onclick: () => act(() => api('POST', `/api/bank/${r.id}/status`, { status: 'a_rapprocher' })).then(render) }, 'Remettre à rapprocher')));
+  }
+  return el('tr', {}, el('td', { class: 'nowrap' }, d(r.date)), el('td', { class: 'small' }, `${r.bank || ''} ${r.account_label || ''}`),
+    el('td', { class: 'small', style: 'max-width:380px' }, r.label), el('td', { class: 'num', style: r.amount < 0 ? 'color:var(--bad)' : 'color:var(--ok)' }, money(r.amount, r.currency)),
+    el('td', {}, el('span', { class: 'badge ' + st[1] }, st[0]), r.reconciled && r.status === 'partielle' ? el('div', { class: 'small muted' }, `rapproché : ${money(r.reconciled)}`) : null), right);
+}
+
+function reconcileModal(r, preset, alternatives) {
+  const remaining = -r.amount - (r.reconciled || 0);
+  const chosen = new Map();
+  (preset || []).forEach(i => chosen.set(i.id, { ...i, amount: i.amount }));
+  const body = el('div');
+  const totalEl = el('strong');
+  const validate = el('input', { type: 'checkbox' });
+  const listEl = el('div');
+  const draw = () => {
+    listEl.replaceChildren(...[...chosen.values()].map(i => {
+      const amt = el('input', { value: moneyIn(i.amount), style: 'width:110px;text-align:right', onchange: e => { const v = parseAmount(e.target.value); if (!Number.isNaN(v) && v > 0) { i.amount = v; drawTotal(); } } });
+      return el('div', { class: 'row', style: 'align-items:center;margin:3px 0' }, el('span', { class: 'grow small' }, `${i.supplier_name || ''} ${i.reference || '#' + i.id} — solde ${money(i.balance)}` + (i.validation_status !== 'validee' ? ' (à vérifier)' : '')),
+        amt, el('button', { class: 'small', onclick: () => { chosen.delete(i.id); draw(); } }, '×'));
+    }));
+    drawTotal();
+  };
+  const drawTotal = () => { const t = [...chosen.values()].reduce((s, i) => s + i.amount, 0); totalEl.textContent = `${money(t)} affectés sur ${money(remaining)}` + (t === remaining ? ' ✓' : t > remaining ? ' — dépasse le montant !' : ''); };
+  const search = el('input', { type: 'search', placeholder: 'Rechercher une facture ouverte (fournisseur, référence)…' });
+  const results = el('div', { class: 'small' });
+  const doSearch = async () => {
+    const res = await api('GET', '/api/invoices?' + qs({ search: search.value, open: '1', doc_type: 'facture', per_page: 15, sort: 'due_date', dir: 'asc' }));
+    results.replaceChildren(...res.rows.filter(i => !chosen.has(i.id)).map(i => el('div', { class: 'row', style: 'align-items:center' },
+      el('span', { class: 'grow' }, `${i.supplier_name || ''} ${i.reference || '#' + i.id} — solde ${money(i.balance)} · éch. ${d(i.due_date)}` + (i.validation_status !== 'validee' ? ' (à vérifier)' : '')),
+      el('button', { class: 'small', onclick: () => { chosen.set(i.id, { id: i.id, reference: i.reference, supplier_name: i.supplier_name, balance: i.balance, validation_status: i.validation_status, amount: Math.min(i.balance, Math.max(0, remaining - [...chosen.values()].reduce((s, x) => s + x.amount, 0))) || i.balance }); draw(); doSearch(); } }, 'Ajouter'))));
+  };
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
+  body.append(el('div', { class: 'kv' }, el('div', { class: 'k' }, 'Opération'), el('div', {}, `${d(r.date)} — ${r.label}`), el('div', { class: 'k' }, 'Montant à affecter'), el('div', {}, money(remaining, r.currency))));
+  if (alternatives) body.appendChild(el('div', { style: 'margin-top:8px' }, el('h3', {}, 'Propositions'), alternatives.map(a => el('div', { class: 'row', style: 'align-items:center;margin:3px 0' },
+    el('span', { class: 'badge ' + (CONF[a.confiance] || ['', ''])[1] }, (CONF[a.confiance] || [a.confiance])[0]),
+    el('span', { class: 'grow small' }, a.invoices.map(i => `${i.reference || '#' + i.id} (${money(i.amount)})`).join(', ') + ' — ' + a.raisons.join(' · ')),
+    el('button', { class: 'small', onclick: () => { chosen.clear(); a.invoices.forEach(i => chosen.set(i.id, { ...i })); draw(); } }, 'Choisir')))));
+  body.append(el('h3', {}, 'Factures réglées par cette opération'), listEl, el('div', { style: 'margin:6px 0' }, totalEl),
+    el('div', { class: 'row', style: 'margin-top:8px' }, search, el('button', { class: 'small', onclick: doSearch }, 'Chercher')), results,
+    el('label', { class: 'small', style: 'display:block;margin-top:10px' }, validate, ' Valider aussi les factures encore « à vérifier » qui n\'ont aucune anomalie bloquante'),
+    el('p', { class: 'small muted' }, 'Chaque facture reçoit un règlement daté du jour de l\'opération, avec le libellé bancaire en référence. Annulable depuis cet écran.'));
+  draw();
+  modal('Rapprocher l\'opération', body, [{ label: 'Créer les règlements', fn: async close => {
+    const alloc = [...chosen.values()].map(i => ({ invoice_id: i.id, amount: i.amount }));
+    await act(() => api('POST', `/api/bank/${r.id}/reconcile`, { alloc, validate: validate.checked }), 'Rapprochement enregistré');
+    close(); render();
+  } }]);
+}
+
+function ignoreModal(r) {
+  const cat = el('select', {}, BANK_CATEGORIES.map(c => el('option', { value: c }, c)));
+  const note = el('input', { placeholder: 'Précision (facultatif)' });
+  modal('Opération sans facture fournisseur', el('div', {}, el('p', {}, `${d(r.date)} — ${r.label} — ${money(r.amount, r.currency)}`),
+    el('label', { class: 'f' }, 'Nature', cat), el('label', { class: 'f' }, 'Note', note)),
+    [{ label: 'Classer hors factures', fn: async close => { await act(() => api('POST', `/api/bank/${r.id}/status`, { status: 'ignoree', category: cat.value, note: note.value })); close(); render(); } }]);
 }
