@@ -143,3 +143,14 @@ tr.click { cursor: pointer; } tr.click:hover td { background: #f7f9fc; }
 .progress-banner .progress-link { display: block; color: inherit; padding: 6px 0; }
 .progress-banner .progress-link:hover { text-decoration: none; background: var(--line2); }
 .progress > div { transition: width .6s ease; }
+/* Encaissements web : ventes par jour */
+.vj-table td, .vj-table th { padding-top: 5px; padding-bottom: 5px; }
+.vj-table tr.vj-off td { background: #fafbfc; color: var(--muted); }
+.vj-table tr.vj-today td { background: var(--brand-soft); }
+.vj-table td.vj-cell { cursor: pointer; }
+.vj-table td.vj-cell:hover { background: var(--line2); }
+.vj-table .vj-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
+.vj-table tfoot td { border-top: 2px solid var(--line); background: #fafbfc; }
+.vj-detail { margin-bottom: 8px; }
+.badge.vj-attendu { background: #eceff3; color: #475467; }
+.badge.vj-nv { background: transparent; color: #98a2b3; border: 1px dashed #d0d5dd; }

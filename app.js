@@ -1212,11 +1212,12 @@ async function viewEncaissements(view) {
   // Onglets
   const nTodo = ov.providers.reduce((s, x) => s + x.n_anomalies, 0);
   const nPay = ov.providers.reduce((s, x) => s + x.n_versements, 0);
-  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['previsionnel', 'Prévisionnel'], ['parametres', 'Paramètres']];
+  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['ventes-jour', 'Ventes par jour'], ['previsionnel', 'Prévisionnel'], ['parametres', 'Paramètres']];
   if (canWrite() && !S.demo) tabs.push(['deposer', 'Déposer des exports']);
   const body = el('div');
   view.appendChild(el('div', { class: 'panel' }, el('div', { class: 'tabs' }, tabs.map(([k, l]) => el('button', { class: p.tab === k ? 'on' : '', onclick: () => go({ ...p, tab: k, page: 1, etat: '', kind: '' }) }, l))), body));
   if (p.tab === 'versements') await pspPayoutsTab(body, p, go, ov);
+  else if (p.tab === 'ventes-jour') await pspSalesByDayTab(body, p, go);
   else if (p.tab === 'previsionnel') await pspForecastTab(body, p, go);
   else if (p.tab === 'parametres') await pspSettingsTab(body, ov);
   else if (p.tab === 'deposer') body.appendChild(uploadPanel({ title: 'Déposez les exports des prestataires', label: 'Exports encaissements web', accept: '.csv,.xlsx',
@@ -1462,6 +1463,98 @@ async function pspForecastTab(body, p, go) {
   const notes = f.rules.filter(r => r.note);
   if (notes.length) body.appendChild(el('details', { style: 'margin-top:10px' }, el('summary', { class: 'small muted' }, 'Règles appliquées'),
     el('ul', { class: 'small' }, notes.map(r => el('li', {}, el('strong', {}, r.provider_label), r.valid_from || r.valid_to ? ` (ventes ${r.valid_from ? 'du ' + d(r.valid_from) : ''}${r.valid_to ? ' au ' + d(r.valid_to) : ''})` : '', ' — ', r.note)))));
+}
+
+// ------------------------------------------------------------------ encaissements web : ventes par jour (vendu → net attendu → banque)
+L.vj_statut = { recu: ['Reçu', 'b-ok'], attendu: ['Attendu', 'vj-attendu'], en_retard: ['En retard', 'b-bad'], non_verifiable: ['Non vérifiable', 'vj-nv'] };
+const VJ_SOURCE = { versement: 'd\'après les versements du prestataire', banque: 'd\'après les crédits bancaires au libellé du prestataire' };
+const vjEur = c => (c === null || c === undefined) ? '—' : money(c) + ' €';
+const vjDay = iso => `${FC_DOW[new Date(iso + 'T12:00:00Z').getUTCDay() || 7]} ${fcShort(iso)}`;
+
+async function pspSalesByDayTab(body, p, go) {
+  const f = await api('GET', '/api/psp/sales-by-day?' + qs({ from: p.vj_from || '', to: p.vj_to || '' }));
+  const provs = f.providers;
+  const nav = n => go({ ...p, vj_from: fcShift(f.from, n), vj_to: fcShift(f.to, n) });
+  const t = f.totaux || {};
+  const st = t.statuts || {};
+  body.append(
+    el('p', { class: 'small muted' }, 'Pour chaque jour de vente (heure de Paris) : montant vendu (ventes − remboursements du jour), net attendu et date d\'arrivée en banque attendue selon les règles du prévisionnel (Paramètres). ',
+      'Statut d\'après les versements du prestataire quand les transactions du jour y sont rattachées (Shopify Payments, JUST, TikTok), sinon d\'après les crédits bancaires au libellé du prestataire autour de la date attendue (± 1 jour ouvré, délai de tolérance compris). ',
+      'Cliquez sur une case pour le détail.'),
+    el('div', { class: 'row', style: 'margin:10px 0;align-items:center' },
+      el('button', { class: 'small', onclick: () => nav(-7) }, '‹ 7 jours'),
+      el('button', { class: 'small', onclick: () => go({ ...p, vj_from: '', vj_to: '' }) }, 'Aujourd\'hui'),
+      el('button', { class: 'small', onclick: () => nav(7) }, '7 jours ›'),
+      el('span', { class: 'muted small' }, `Ventes du ${d(f.from)} au ${d(f.to)}`
+        + (f.bank_last_date ? ` · relevés bancaires importés jusqu'au ${d(f.bank_last_date)}` : ' · aucun relevé bancaire importé'))),
+    el('div', { class: 'kpis' },
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Vendu sur la période'), el('div', { class: 'v' }, vjEur(t.vendu))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Net attendu'), el('div', { class: 'v' }, vjEur(t.net))),
+      el('div', { class: 'kpi' + (st.en_retard ? ' bad' : '') }, el('div', { class: 'l' }, 'Cases en retard'), el('div', { class: 'v' }, String(st.en_retard || 0))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Reçues / attendues / non vérifiables'),
+        el('div', { class: 'v' }, `${st.recu || 0} / ${st.attendu || 0} / ${st.non_verifiable || 0}`))));
+  if (!provs.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucun prestataire suivi.')); return; }
+
+  const head = el('tr', {}, el('th', {}, 'Jour de vente'),
+    provs.map(x => el('th', { class: 'num' }, x.label, FC_QUALITY[x.quality] ? el('div', {}, el('span', { class: 'badge ' + FC_QUALITY[x.quality][1] }, FC_QUALITY[x.quality][0])) : null)),
+    el('th', { class: 'num' }, 'Total'));
+  const cell = (dd, x) => {
+    const c = dd.cells[x.code];
+    if (!c) return el('td', { class: 'num vj-empty' }, '');
+    const dates = (c.parts || []).map(q => (q.share < 1 ? `${Math.round(q.share * 100)} % ` : '') + '→ ' + vjDay(q.date_attendue));
+    return el('td', { class: 'num vj-cell', title: 'Voir le détail', onclick: () => vjDetail(dd, x, c) },
+      el('div', { class: 'vj-amt' }, vjEur(c.vendu)),
+      c.net !== null && c.net !== undefined ? el('div', { class: 'small muted' }, `net ${vjEur(c.net)}`) : el('div', { class: 'small muted' }, 'pas de règle'),
+      dates.length ? el('div', { class: 'small muted nowrap' }, dates.join(' · ')) : null,
+      c.source === 'versement' && c.date_reelle ? el('div', { class: 'small nowrap' }, `en banque ${vjDay(c.date_reelle)}`) : null,
+      c.statut ? el('div', {}, badge('vj_statut', c.statut)) : null);
+  };
+  const days = f.days.slice().reverse();   // jours les plus récents en haut
+  const rows = days.map(dd => el('tr', { class: [dd.date === f.today ? 'vj-today' : '', dd.ouvre ? '' : 'vj-off'].join(' ').trim() || null },
+    el('td', { class: 'nowrap' }, `${FC_DOW[dd.dow]} ${d(dd.date)}`, dd.ferie ? el('div', { class: 'small muted' }, 'férié') : (!dd.ouvre ? el('div', { class: 'small muted' }, 'non ouvré') : null),
+      dd.date === f.today ? el('div', { class: 'small' }, 'aujourd\'hui') : null),
+    provs.map(x => cell(dd, x)),
+    el('td', { class: 'num' }, el('strong', {}, dd.total_vendu ? vjEur(dd.total_vendu) : '—'),
+      dd.total_net ? el('div', { class: 'small muted' }, `net ${vjEur(dd.total_net)}`) : null)));
+  const pp = t.par_prestataire || {};
+  const foot = el('tr', { class: 'vj-total' }, el('td', {}, el('strong', {}, 'Total')),
+    provs.map(x => el('td', { class: 'num' }, pp[x.code] ? [el('strong', {}, vjEur(pp[x.code].vendu)), el('div', { class: 'small muted' }, `net ${vjEur(pp[x.code].net)}`),
+      el('div', { class: 'small muted' }, `${pp[x.code].n_commandes} cmd`)] : '—')),
+    el('td', { class: 'num' }, el('strong', {}, vjEur(t.vendu)), el('div', { class: 'small muted' }, `net ${vjEur(t.net)}`)));
+  body.appendChild(el('div', { class: 'table-wrap' }, el('table', { class: 'vj-table' }, el('thead', {}, head), el('tbody', {}, rows), el('tfoot', {}, foot))));
+  body.appendChild(el('div', { class: 'small muted', style: 'margin-top:6px' },
+    'Reçu : versement retrouvé en banque (ou crédit du prestataire à la date attendue). Attendu : date pas encore passée, délai de tolérance en cours ou relevé pas encore importé. ',
+    'En retard : rien trouvé sur les relevés importés après le délai de tolérance. Non vérifiable : date antérieure aux premiers relevés couvrant ce prestataire. ',
+    'Les crédits au libellé du prestataire ne sont pas affectés à un jour de vente précis : le statut « reçu » indique qu\'un crédit est arrivé à la date attendue, pas que son montant correspond.'));
+}
+
+function vjDetail(dd, x, c) {
+  const kv = (k, v) => [el('div', { class: 'k' }, k), el('div', {}, v)];
+  const qual = FC_QUALITY[c.quality] ? el('span', { class: 'badge ' + FC_QUALITY[c.quality][1] }, FC_QUALITY[c.quality][0]) : el('span', { class: 'badge b-ok' }, 'règle mesurée');
+  const parts = (c.parts || []).length ? el('table', { class: 'vj-detail' },
+    el('thead', {}, el('tr', {}, ['Part', 'Net attendu', 'Date attendue', 'Crédit bancaire'].map((h, i) => el('th', { class: i === 1 ? 'num' : '' }, h)))),
+    el('tbody', {}, c.parts.map(q => el('tr', {},
+      el('td', {}, `${Math.round(q.share * 100)} %`, q.fee_rate > 0 ? el('div', { class: 'small muted' }, `frais ${String(Math.round(q.fee_rate * 10000) / 100).replace('.', ',')} %`) : null),
+      el('td', { class: 'num' }, vjEur(q.net)),
+      el('td', { class: 'nowrap' }, `${vjDay(q.date_attendue)} (J+${q.jours})`, el('div', { class: 'small muted' }, `tolérance jusqu'au ${fcShort(q.date_limite)}`),
+        c.source !== 'versement' && q.statut_banque ? el('div', {}, badge('vj_statut', q.statut_banque)) : null),
+      el('td', { class: 'small' }, q.credit ? [el('div', {}, `${d(q.credit.date)} — ${vjEur(q.credit.amount)}`), el('div', { class: 'muted' }, q.credit.label)] : el('span', { class: 'muted' }, '—'))))))
+    : el('div', { class: 'small muted' }, 'Aucune règle de prévisionnel pour ce prestataire à cette date.');
+  const vers = (c.versements || []).length ? [el('h3', {}, 'Versements rattachés'), el('table', { class: 'vj-detail' },
+    el('thead', {}, el('tr', {}, ['Versement', 'Montant', 'Banque', 'État'].map((h, i) => el('th', { class: i === 1 ? 'num' : '' }, h)))),
+    el('tbody', {}, c.versements.map(v => el('tr', {},
+      el('td', { class: 'small' }, el('div', {}, d(v.payout_date)), el('div', { class: 'mono muted' }, v.bank_ref || v.ext_id || '—')),
+      el('td', { class: 'num' }, vjEur(v.amount)),
+      el('td', { class: 'small' }, v.bank_date ? `${d(v.bank_date)} — ${vjEur(v.bank_amount)}` : el('span', { class: 'muted' }, `attendu au plus tard le ${d(v.expected_by)}`)),
+      el('td', {}, badge('psp_etat', v.etat))))))] : [];
+  modal(`${x.label} — ventes du ${FC_DOW_LONG[dd.dow].toLowerCase()} ${d(dd.date)}`, el('div', {},
+    el('div', { class: 'row', style: 'gap:8px;margin-bottom:10px' }, c.statut ? badge('vj_statut', c.statut) : null, qual,
+      c.source ? el('span', { class: 'small muted' }, 'Statut ' + VJ_SOURCE[c.source]) : null),
+    el('div', { class: 'kv', style: 'margin-bottom:10px' },
+      kv('Commandes', String(c.n_commandes)), kv('Ventes', vjEur(c.ventes)), kv('Remboursements', c.remboursements ? '− ' + vjEur(c.remboursements) : '—'),
+      kv('Vendu', el('strong', {}, vjEur(c.vendu))), kv('Frais estimés', vjEur(c.frais)), kv('Net attendu', el('strong', {}, vjEur(c.net))),
+      c.n_tx ? kv('Transactions prestataire', `${c.n_tx}` + (c.n_tx_sans_versement ? ` (dont ${c.n_tx_sans_versement} pas encore dans un versement)` : '')) : []),
+    parts, ...vers), []);
 }
 
 // Paramètres : règles du prévisionnel (administrateurs). Taux saisis en %, stockés en fraction.

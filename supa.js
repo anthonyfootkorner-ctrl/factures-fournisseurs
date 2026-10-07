@@ -228,6 +228,7 @@ async function apiRoute(method, url, body) {
   if (method === 'POST' && R(/^\/api\/psp\/unack$/)) return SB.rpc('psp_unack', { p_demo: demo, p_key: body.key });
   if (method === 'POST' && R(/^\/api\/psp\/providers\/([a-z_]+)$/)) return SB.rpc('psp_provider_update', { p_code: m[1], p: body });
   if (method === 'GET' && R(/^\/api\/psp\/forecast$/)) return SB.rpc('psp_forecast', { p: q });
+  if (method === 'GET' && R(/^\/api\/psp\/sales-by-day$/)) return SB.rpc('psp_sales_by_day', { p: q });
   if (method === 'POST' && R(/^\/api\/psp\/forecast-rules\/(\d+)$/)) return SB.rpc('psp_forecast_rule_update', { p_id: +m[1], p: body });
   throw new Error('Route inconnue : ' + method + ' ' + path);
 }
