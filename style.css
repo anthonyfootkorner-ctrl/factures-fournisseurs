@@ -154,3 +154,16 @@ tr.click { cursor: pointer; } tr.click:hover td { background: #f7f9fc; }
 .vj-detail { margin-bottom: 8px; }
 .badge.vj-attendu { background: #eceff3; color: #475467; }
 .badge.vj-nv { background: transparent; color: #98a2b3; border: 1px dashed #d0d5dd; }
+/* Ventes par jour : période, CA Shopify, % reçu */
+.vj-range { margin: 10px 0 4px; }
+.vj-range-row { align-items: flex-end; flex-wrap: wrap; gap: 8px; }
+.vj-quick { display: flex; gap: 4px; flex-wrap: wrap; }
+.vj-range-msg { color: var(--bad); font-size: 12px; margin-top: 4px; min-height: 0; }
+.vj-range-msg:empty { display: none; }
+.vj-period { margin-bottom: 10px; }
+.vj-notes { margin-top: 6px; }
+.vj-table td.vj-ca { background: #fbfcfe; }
+.vj-table .vj-partiel { color: var(--warn); font-weight: 600; }
+.badge.vj-pct { font-variant-numeric: tabular-nums; }
+.vj-detail-head { gap: 8px; margin-bottom: 10px; align-items: center; }
+.vj-detail-kv { margin-bottom: 10px; }

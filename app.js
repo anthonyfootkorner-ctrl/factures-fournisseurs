@@ -1468,64 +1468,163 @@ async function pspForecastTab(body, p, go) {
 // ------------------------------------------------------------------ encaissements web : ventes par jour (vendu → net attendu → banque)
 L.vj_statut = { recu: ['Reçu', 'b-ok'], attendu: ['Attendu', 'vj-attendu'], en_retard: ['En retard', 'b-bad'], non_verifiable: ['Non vérifiable', 'vj-nv'] };
 const VJ_SOURCE = { versement: 'd\'après les versements du prestataire', banque: 'd\'après les crédits bancaires au libellé du prestataire' };
+const VJ_MAX_DAYS = 62;   // limite de psp_sales_by_day
+const VJ_TOL = 100;       // écart CA Shopify / encaissé toléré : 1 € (centimes)
 const vjEur = c => (c === null || c === undefined) ? '—' : money(c) + ' €';
 const vjDay = iso => `${FC_DOW[new Date(iso + 'T12:00:00Z').getUTCDay() || 7]} ${fcShort(iso)}`;
+const vjIso = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '') ? s : '';
+const vjToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });   // AAAA-MM-JJ, heure de Paris
+const vjNbDays = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000) + 1;
+// Pourcentage reçu (fraction 0 → 1) : jamais « 100 % » tant que tout n'est pas reçu, jamais « 0 % » dès qu'une partie l'est.
+function vjPct(x) {
+  if (x === null || x === undefined) return '—';
+  let v = Math.round(x * 1000) / 10;
+  if (x < 1 && v >= 100) v = 99.9;
+  if (x > 0 && v <= 0) v = 0.1;
+  return String(v).replace('.', ',') + ' %';
+}
+// Badge « % reçu » : vert 100 %, rouge si en retard, orange si partiel, gris si rien encore (attendu / non vérifiable).
+function vjPctBadge(pctRecu, statut, netRecu, net) {
+  if (pctRecu === null || pctRecu === undefined) return null;
+  const cls = pctRecu >= 1 ? 'b-ok' : statut === 'en_retard' ? 'b-bad' : pctRecu > 0 ? 'b-warn' : 'vj-attendu';
+  return el('span', { class: 'badge vj-pct ' + cls, title: `${vjEur(netRecu)} reçus sur ${vjEur(net)} attendus` }, vjPct(pctRecu));
+}
+// Écart CA Shopify − encaissé : badge « = Shopify » à 1 € près, sinon montant en orange.
+function vjEcart(e) {
+  if (e === null || e === undefined) return null;
+  if (Math.abs(e) <= VJ_TOL) return el('span', { class: 'badge b-ok', title: `écart ${vjEur(e)}` }, '= Shopify');
+  return el('div', { class: 'small fc-warn nowrap' }, `écart ${e > 0 ? '+' : ''}${vjEur(e)}`);
+}
+
+// Sélecteur de période : du / au + raccourcis, conservés dans l'adresse (#/encaissements?tab=ventes-jour&from=…&to=…).
+function vjRangeBar(p, go, from, to, f) {
+  const today = (f && f.today) || vjToday();
+  const iFrom = el('input', { type: 'date', value: from || '', 'aria-label': 'Du' });
+  const iTo = el('input', { type: 'date', value: to || '', 'aria-label': 'Au' });
+  const msg = el('div', { class: 'vj-range-msg', role: 'alert' });
+  const apply = (a, b) => {
+    msg.textContent = '';
+    if (!vjIso(a) || !vjIso(b)) { msg.textContent = 'Indiquez une date de début et une date de fin.'; return; }
+    if (b < a) { msg.textContent = 'La date de fin doit être postérieure ou égale à la date de début.'; return; }
+    const n = vjNbDays(a, b);
+    if (n > VJ_MAX_DAYS) { msg.textContent = `Période trop longue : ${n} jours sélectionnés, ${VJ_MAX_DAYS} jours au plus. Réduisez la période (un mois à la fois par exemple).`; return; }
+    go({ ...p, from: a, to: b, vj_from: '', vj_to: '' });
+  };
+  [iFrom, iTo].forEach(i => i.addEventListener('keydown', e => e.key === 'Enter' && apply(iFrom.value, iTo.value)));
+  const m1 = today.slice(0, 8) + '01';
+  const prevEnd = fcShift(m1, -1);
+  const quick = [['7 j', fcShift(today, -6), today], ['14 j', fcShift(today, -13), today], ['30 j', fcShift(today, -29), today],
+    ['Mois en cours', m1, today], ['Mois précédent', prevEnd.slice(0, 8) + '01', prevEnd]];
+  const cur = f ? [f.from, f.to] : [from, to];
+  const shift = n => { if (f) go({ ...p, from: fcShift(f.from, n), to: fcShift(f.to, n), vj_from: '', vj_to: '' }); };
+  return el('div', { class: 'vj-range' },
+    el('div', { class: 'row vj-range-row' },
+      el('label', { class: 'f' }, 'Du', iFrom), el('label', { class: 'f' }, 'Au', iTo),
+      el('button', { class: 'primary', onclick: () => apply(iFrom.value, iTo.value) }, 'Afficher'),
+      el('div', { class: 'vj-quick' }, quick.map(([l, a, b]) => el('button', { class: 'small' + (a === cur[0] && b === cur[1] ? ' primary' : ''), onclick: () => apply(a, b) }, l))),
+      f ? el('div', { class: 'vj-quick' },
+        el('button', { class: 'small', title: 'Décaler la période de 7 jours en arrière', onclick: () => shift(-7) }, '‹ 7 jours'),
+        el('button', { class: 'small', title: 'Décaler la période de 7 jours en avant', onclick: () => shift(7) }, '7 jours ›')) : null),
+    msg);
+}
 
 async function pspSalesByDayTab(body, p, go) {
-  const f = await api('GET', '/api/psp/sales-by-day?' + qs({ from: p.vj_from || '', to: p.vj_to || '' }));
+  const from = vjIso(p.from || p.vj_from), to = vjIso(p.to || p.vj_to);
+  let f;
+  try { f = await api('GET', '/api/psp/sales-by-day?' + qs({ from, to })); }
+  catch (e) {
+    if (e.status === 401) throw e;
+    body.append(vjRangeBar(p, go, from, to, null), el('div', { class: 'callout bad' },
+      /62 jours/.test(e.message) ? `Période invalide : ${VJ_MAX_DAYS} jours au plus, date de fin postérieure ou égale à la date de début. Choisissez une autre période.` : e.message));
+    return;
+  }
   const provs = f.providers;
-  const nav = n => go({ ...p, vj_from: fcShift(f.from, n), vj_to: fcShift(f.to, n) });
   const t = f.totaux || {};
   const st = t.statuts || {};
+  const shopOk = !!t.ca_shopify_disponible;
+  const hasCa = t.ca_shopify !== null && t.ca_shopify !== undefined;
+  const nDays = f.days.length;
+  const ecartTot = hasCa ? t.ecart_ca : null;
   body.append(
     el('p', { class: 'small muted' }, 'Pour chaque jour de vente (heure de Paris) : montant vendu (ventes − remboursements du jour), net attendu et date d\'arrivée en banque attendue selon les règles du prévisionnel (Paramètres). ',
       'Statut d\'après les versements du prestataire quand les transactions du jour y sont rattachées (Shopify Payments, JUST, TikTok), sinon d\'après les crédits bancaires au libellé du prestataire autour de la date attendue (± 1 jour ouvré, délai de tolérance compris). ',
       'Cliquez sur une case pour le détail.'),
-    el('div', { class: 'row', style: 'margin:10px 0;align-items:center' },
-      el('button', { class: 'small', onclick: () => nav(-7) }, '‹ 7 jours'),
-      el('button', { class: 'small', onclick: () => go({ ...p, vj_from: '', vj_to: '' }) }, 'Aujourd\'hui'),
-      el('button', { class: 'small', onclick: () => nav(7) }, '7 jours ›'),
-      el('span', { class: 'muted small' }, `Ventes du ${d(f.from)} au ${d(f.to)}`
-        + (f.bank_last_date ? ` · relevés bancaires importés jusqu'au ${d(f.bank_last_date)}` : ' · aucun relevé bancaire importé'))),
+    vjRangeBar(p, go, f.from, f.to, f),
+    el('div', { class: 'small muted vj-period' }, `Ventes du ${d(f.from)} au ${d(f.to)} (${nDays} jours)`
+      + (f.bank_last_date ? ` · relevés bancaires importés jusqu'au ${d(f.bank_last_date)}` : ' · aucun relevé bancaire importé')),
     el('div', { class: 'kpis' },
-      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Vendu sur la période'), el('div', { class: 'v' }, vjEur(t.vendu))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'CA Shopify de la période'), el('div', { class: 'v' }, hasCa ? vjEur(t.ca_shopify) : '—'),
+        el('div', { class: 's' }, !shopOk ? 'non disponible (droit read_reports à ajouter)'
+          : !hasCa ? 'aucun jour de rapport sur la période'
+          : (t.jours_ca_shopify < nDays ? `rapport sur ${t.jours_ca_shopify} / ${nDays} jours` : `${t.commandes_shopify || 0} commande(s)`))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Total encaissé (toutes passerelles)'), el('div', { class: 'v' }, vjEur(t.total_encaisse_toutes_passerelles)),
+        el('div', { class: 's' }, 'y compris Baback, carte cadeau…')),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Écart CA Shopify − encaissé'),
+        el('div', { class: 'v ' + (ecartTot === null ? '' : Math.abs(ecartTot) <= VJ_TOL ? 'fc-ok' : 'fc-warn') },
+          ecartTot === null ? '—' : Math.abs(ecartTot) <= VJ_TOL ? '= Shopify' : `${ecartTot > 0 ? '+' : ''}${vjEur(ecartTot)}`),
+        el('div', { class: 's' }, ecartTot === null ? '' : (Math.abs(ecartTot) <= VJ_TOL ? `écart ${vjEur(ecartTot)} (1 € près)` : '')
+          + (hasCa && t.jours_ca_shopify < nDays ? ' sur les jours couverts' : ''))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Vendu (prestataires suivis)'), el('div', { class: 'v' }, vjEur(t.vendu))),
       el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Net attendu'), el('div', { class: 'v' }, vjEur(t.net))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Net reçu'), el('div', { class: 'v' }, vjEur(t.net_recu))),
+      el('div', { class: 'kpi' }, el('div', { class: 'l' }, '% reçu'),
+        el('div', { class: 'v ' + (t.pct_recu === null || t.pct_recu === undefined ? '' : t.pct_recu >= 1 ? 'fc-ok' : st.en_retard ? 'fc-bad' : t.pct_recu > 0 ? 'fc-warn' : '') }, vjPct(t.pct_recu))),
       el('div', { class: 'kpi' + (st.en_retard ? ' bad' : '') }, el('div', { class: 'l' }, 'Cases en retard'), el('div', { class: 'v' }, String(st.en_retard || 0))),
       el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Reçues / attendues / non vérifiables'),
         el('div', { class: 'v' }, `${st.recu || 0} / ${st.attendu || 0} / ${st.non_verifiable || 0}`))));
+  if (!shopOk) body.appendChild(el('div', { class: 'callout info' }, 'CA Shopify non disponible (droit read_reports à ajouter) : ',
+    'l\'application Shopify de la synchronisation doit recevoir la portée read_reports pour lire le rapport « Ventes » par jour.'));
   if (!provs.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucun prestataire suivi.')); return; }
 
   const head = el('tr', {}, el('th', {}, 'Jour de vente'),
+    shopOk ? el('th', { class: 'num' }, 'CA Shopify', el('div', { class: 'small muted' }, 'et écart avec l\'encaissé')) : null,
     provs.map(x => el('th', { class: 'num' }, x.label, FC_QUALITY[x.quality] ? el('div', {}, el('span', { class: 'badge ' + FC_QUALITY[x.quality][1] }, FC_QUALITY[x.quality][0])) : null)),
-    el('th', { class: 'num' }, 'Total'));
+    el('th', { class: 'num' }, 'Total'), el('th', { class: 'num' }, '% reçu'));
+  const caCell = dd => {
+    if (dd.ca_shopify === null || dd.ca_shopify === undefined) return el('td', { class: 'num small muted' }, '—');
+    return el('td', { class: 'num vj-ca' }, el('div', { class: 'vj-amt' }, vjEur(dd.ca_shopify)),
+      el('div', { class: 'small muted nowrap' }, `encaissé ${vjEur(dd.total_encaisse_toutes_passerelles)}`), vjEcart(dd.ecart_ca));
+  };
   const cell = (dd, x) => {
     const c = dd.cells[x.code];
     if (!c) return el('td', { class: 'num vj-empty' }, '');
     const dates = (c.parts || []).map(q => (q.share < 1 ? `${Math.round(q.share * 100)} % ` : '') + '→ ' + vjDay(q.date_attendue));
+    const partiel = c.pct_recu !== null && c.pct_recu !== undefined && c.pct_recu > 0 && c.pct_recu < 1;
     return el('td', { class: 'num vj-cell', title: 'Voir le détail', onclick: () => vjDetail(dd, x, c) },
       el('div', { class: 'vj-amt' }, vjEur(c.vendu)),
       c.net !== null && c.net !== undefined ? el('div', { class: 'small muted' }, `net ${vjEur(c.net)}`) : el('div', { class: 'small muted' }, 'pas de règle'),
       dates.length ? el('div', { class: 'small muted nowrap' }, dates.join(' · ')) : null,
       c.source === 'versement' && c.date_reelle ? el('div', { class: 'small nowrap' }, `en banque ${vjDay(c.date_reelle)}`) : null,
-      c.statut ? el('div', {}, badge('vj_statut', c.statut)) : null);
+      c.statut ? el('div', {}, badge('vj_statut', c.statut), partiel ? el('span', { class: 'small vj-partiel' }, ' ' + vjPct(c.pct_recu)) : null) : null);
   };
   const days = f.days.slice().reverse();   // jours les plus récents en haut
   const rows = days.map(dd => el('tr', { class: [dd.date === f.today ? 'vj-today' : '', dd.ouvre ? '' : 'vj-off'].join(' ').trim() || null },
     el('td', { class: 'nowrap' }, `${FC_DOW[dd.dow]} ${d(dd.date)}`, dd.ferie ? el('div', { class: 'small muted' }, 'férié') : (!dd.ouvre ? el('div', { class: 'small muted' }, 'non ouvré') : null),
       dd.date === f.today ? el('div', { class: 'small' }, 'aujourd\'hui') : null),
+    shopOk ? caCell(dd) : null,
     provs.map(x => cell(dd, x)),
     el('td', { class: 'num' }, el('strong', {}, dd.total_vendu ? vjEur(dd.total_vendu) : '—'),
-      dd.total_net ? el('div', { class: 'small muted' }, `net ${vjEur(dd.total_net)}`) : null)));
+      dd.total_net ? el('div', { class: 'small muted' }, `net ${vjEur(dd.total_net)}`) : null),
+    el('td', { class: 'num' }, vjPctBadge(dd.pct_recu, dd.statut, dd.net_recu, dd.total_net),
+      dd.pct_recu !== null && dd.pct_recu !== undefined ? el('div', { class: 'small muted nowrap' }, `reçu ${vjEur(dd.net_recu)}`) : null)));
   const pp = t.par_prestataire || {};
   const foot = el('tr', { class: 'vj-total' }, el('td', {}, el('strong', {}, 'Total')),
+    shopOk ? el('td', { class: 'num' }, hasCa ? [el('strong', {}, vjEur(t.ca_shopify)), vjEcart(t.ecart_ca)] : '—') : null,
     provs.map(x => el('td', { class: 'num' }, pp[x.code] ? [el('strong', {}, vjEur(pp[x.code].vendu)), el('div', { class: 'small muted' }, `net ${vjEur(pp[x.code].net)}`),
-      el('div', { class: 'small muted' }, `${pp[x.code].n_commandes} cmd`)] : '—')),
-    el('td', { class: 'num' }, el('strong', {}, vjEur(t.vendu)), el('div', { class: 'small muted' }, `net ${vjEur(t.net)}`)));
+      el('div', { class: 'small muted' }, `${pp[x.code].n_commandes} cmd`),
+      pp[x.code].pct_recu !== null && pp[x.code].pct_recu !== undefined ? el('div', { class: 'small muted' }, `reçu ${vjPct(pp[x.code].pct_recu)}`) : null] : '—')),
+    el('td', { class: 'num' }, el('strong', {}, vjEur(t.vendu)), el('div', { class: 'small muted' }, `net ${vjEur(t.net)}`)),
+    el('td', { class: 'num' }, vjPctBadge(t.pct_recu, st.en_retard ? 'en_retard' : null, t.net_recu, t.net)));
   body.appendChild(el('div', { class: 'table-wrap' }, el('table', { class: 'vj-table' }, el('thead', {}, head), el('tbody', {}, rows), el('tfoot', {}, foot))));
-  body.appendChild(el('div', { class: 'small muted', style: 'margin-top:6px' },
+  body.appendChild(el('div', { class: 'small muted vj-notes' },
     'Reçu : versement retrouvé en banque (ou crédit du prestataire à la date attendue). Attendu : date pas encore passée, délai de tolérance en cours ou relevé pas encore importé. ',
     'En retard : rien trouvé sur les relevés importés après le délai de tolérance. Non vérifiable : date antérieure aux premiers relevés couvrant ce prestataire. ',
-    'Les crédits au libellé du prestataire ne sont pas affectés à un jour de vente précis : le statut « reçu » indique qu\'un crédit est arrivé à la date attendue, pas que son montant correspond.'));
+    'Les crédits au libellé du prestataire ne sont pas affectés à un jour de vente précis : le statut « reçu » indique qu\'un crédit est arrivé à la date attendue, pas que son montant correspond.'),
+    el('div', { class: 'small muted vj-notes' },
+      '% reçu : net des parts reçues (ou, pour les prestataires à versements, part du net des transactions du jour comprises dans un versement reçu) rapporté au net attendu. ',
+      'Vert 100 %, orange partiel, gris rien encore (attendu), rouge en retard. ',
+      'CA Shopify : « Ventes totales » du rapport Ventes de Shopify pour le jour ; encaissé : ventes − remboursements du jour, toutes passerelles (y compris non suivies). ',
+      '« = Shopify » : écart de 1 € au plus. Un écart peut venir de remboursements comptés un autre jour, de ventes de cartes cadeaux ou de commandes payées plus tard (paiement différé, Stockly).'));
 }
 
 function vjDetail(dd, x, c) {
@@ -1548,11 +1647,12 @@ function vjDetail(dd, x, c) {
       el('td', { class: 'small' }, v.bank_date ? `${d(v.bank_date)} — ${vjEur(v.bank_amount)}` : el('span', { class: 'muted' }, `attendu au plus tard le ${d(v.expected_by)}`)),
       el('td', {}, badge('psp_etat', v.etat))))))] : [];
   modal(`${x.label} — ventes du ${FC_DOW_LONG[dd.dow].toLowerCase()} ${d(dd.date)}`, el('div', {},
-    el('div', { class: 'row', style: 'gap:8px;margin-bottom:10px' }, c.statut ? badge('vj_statut', c.statut) : null, qual,
+    el('div', { class: 'row vj-detail-head' }, c.statut ? badge('vj_statut', c.statut) : null, vjPctBadge(c.pct_recu, c.statut, c.net_recu, c.net), qual,
       c.source ? el('span', { class: 'small muted' }, 'Statut ' + VJ_SOURCE[c.source]) : null),
-    el('div', { class: 'kv', style: 'margin-bottom:10px' },
+    el('div', { class: 'kv vj-detail-kv' },
       kv('Commandes', String(c.n_commandes)), kv('Ventes', vjEur(c.ventes)), kv('Remboursements', c.remboursements ? '− ' + vjEur(c.remboursements) : '—'),
       kv('Vendu', el('strong', {}, vjEur(c.vendu))), kv('Frais estimés', vjEur(c.frais)), kv('Net attendu', el('strong', {}, vjEur(c.net))),
+      c.net_recu !== null && c.net_recu !== undefined ? kv('Net reçu', `${vjEur(c.net_recu)}` + (c.pct_recu !== null && c.pct_recu !== undefined ? ` (${vjPct(c.pct_recu)})` : '')) : [],
       c.n_tx ? kv('Transactions prestataire', `${c.n_tx}` + (c.n_tx_sans_versement ? ` (dont ${c.n_tx_sans_versement} pas encore dans un versement)` : '')) : []),
     parts, ...vers), []);
 }
