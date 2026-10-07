@@ -125,7 +125,7 @@ function changeOwnPassword() {
 // ------------------------------------------------------------------ squelette & routage
 const NAV = [
   ['#/', 'Tableau de bord'], ['#/factures', 'Factures'], ['#/a-verifier', 'À vérifier'],
-  ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
+  ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/encaissements', 'Suivi encaissements web'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
 ];
 let reviewCount = null;
 
@@ -147,8 +147,27 @@ async function loadLookups() {
 }
 
 let currentTimer = null;
+let bannerTimer = null;
+// Bandeau d'avancement des imports, visible sur toutes les pages tant qu'un traitement est en cours (actualisé toutes les 15 s).
+async function refreshProgressBanner(box) {
+  if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+  if (!document.body.contains(box)) return;
+  let prog = null;
+  try { prog = await api('GET', '/api/progress?' + qs({}), undefined, { quiet: true }); } catch (e) { return; }
+  const lots = (prog.lots || []).filter(l => l.restants > 0);
+  if (!lots.length || location.hash.startsWith('#/imports/')) { box.replaceChildren(); }
+  else {
+    const ws = workerState(prog.worker_last_seen);
+    box.replaceChildren(el('div', { class: 'panel progress-banner' },
+      el('div', { class: 'row', style: 'align-items:center;margin-bottom:6px' }, el('strong', {}, 'Import en cours'), el('span', { class: 'grow' }),
+        el('span', { class: 'small' }, 'Poste de traitement : ', el('span', { class: 'badge ' + ws.cls }, ws.label))),
+      lots.map(l => el('a', { href: '#/imports/' + l.id, class: 'progress-link' }, progressBlock(l, { title: l.label || ('Lot #' + l.id) })))));
+  }
+  bannerTimer = setTimeout(() => refreshProgressBanner(box), 15000);
+}
 async function render() {
   if (currentTimer) { clearInterval(currentTimer); currentTimer = null; }
+  if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
   const app = $('#app');
   if (!S.user) return renderLogin();
   await loadLookups().catch(() => {});
@@ -170,9 +189,12 @@ async function render() {
       ' ', el('button', { class: 'small', onclick: changeOwnPassword }, 'Mot de passe')));
   app.replaceChildren(el('div', { class: 'layout' }, side, main));
   if (S.demo) main.appendChild(el('div', { class: 'demo-banner' }, 'MODE DÉMONSTRATION — données fictives, séparées des données réelles'));
+  const banner = el('div');
+  main.appendChild(banner);
   const view = el('div');
   main.appendChild(view);
   updateReviewCount();
+  refreshProgressBanner(banner);
   const parts = hash.slice(2).split('?')[0].split('/');
   try {
     if (parts[0] === '' ) await viewDashboard(view);
@@ -185,6 +207,7 @@ async function render() {
     else if (parts[0] === 'imports') await viewImports(view);
     else if (parts[0] === 'parametres') await viewSettings(view);
     else if (parts[0] === 'banque') await viewBank(view);
+    else if (parts[0] === 'encaissements') await viewEncaissements(view);
     else view.appendChild(el('p', {}, 'Page introuvable'));
   } catch (e) { view.appendChild(el('div', { class: 'callout bad' }, e.message)); }
 }
@@ -832,28 +855,55 @@ async function viewImports(view) {
     ws.ok ? '' : ' — les fichiers déposés sont conservés et seront traités dès que le poste sera de nouveau allumé.'));
   if (canWrite() && !S.demo) view.appendChild(uploadPanel({}));
   const batches = await api('GET', '/api/batches?' + qs({}));
-  view.appendChild(el('div', { class: 'panel table-wrap' }, el('h2', {}, 'Lots importés'), el('table', {}, el('thead', {}, el('tr', {}, ['Lot', 'Libellé', 'Date', 'Par', 'Fichiers', 'En cours', 'Erreurs', 'Doublons', 'À mapper', 'Factures'].map(h => el('th', {}, h)))),
+  view.appendChild(el('div', { class: 'panel table-wrap' }, el('h2', {}, 'Lots importés'), el('table', {}, el('thead', {}, el('tr', {}, ['Lot', 'Libellé', 'Date', 'Par', 'Progression', 'Fichiers', 'En cours', 'Erreurs', 'Doublons', 'À mapper', 'Factures'].map(h => el('th', {}, h)))),
     el('tbody', {}, batches.length ? batches.map(b => el('tr', { class: 'click', onclick: () => { location.hash = '#/imports/' + b.id; } }, el('td', {}, '#' + b.id), el('td', {}, b.label || '—'), el('td', {}, dt(b.created_at)), el('td', {}, b.user_name || '—'),
+      el('td', { style: 'min-width:140px' }, el('div', { class: 'progress', title: `${b.items - b.pending} / ${b.items}` }, el('div', { style: `width:${b.items ? Math.floor((b.items - b.pending) / b.items * 100) : 0}%` })),
+        el('div', { class: 'small muted' }, b.pending ? `${Math.floor((b.items - b.pending) / b.items * 100)} %` : 'terminé')),
       el('td', {}, b.items), el('td', {}, b.pending ? el('span', { class: 'badge b-info' }, b.pending) : '0'), el('td', {}, b.errors ? el('span', { class: 'badge b-bad' }, b.errors) : '0'),
       el('td', {}, b.duplicates ? el('span', { class: 'badge b-warn' }, b.duplicates) : '0'), el('td', {}, b.mapping ? el('span', { class: 'badge b-warn' }, b.mapping) : '0'), el('td', {}, b.invoices)))
-      : el('tr', {}, el('td', { colspan: 10, class: 'empty' }, 'Aucun import'))))));
+      : el('tr', {}, el('td', { colspan: 11, class: 'empty' }, 'Aucun import'))))));
+}
+
+// Barre de progression d'un lot : fichiers traités, vitesse mesurée, fin estimée.
+function progressBlock(lot, opts = {}) {
+  const pct = lot.total ? Math.floor(lot.faits / lot.total * 100) : 0;
+  const fin = lot.fin_estimee ? new Date(lot.fin_estimee) : null;
+  const restMin = fin ? Math.max(1, Math.round((fin - Date.now()) / 60000)) : null;
+  const dureeTxt = restMin === null ? '' : restMin < 60 ? `${restMin} min` : `${Math.floor(restMin / 60)} h ${String(restMin % 60).padStart(2, '0')}`;
+  return el('div', { class: 'progress-block' },
+    el('div', { class: 'row', style: 'align-items:center;gap:10px' },
+      opts.title ? el('strong', {}, opts.title) : null,
+      el('div', { class: 'progress grow', style: 'height:12px' }, el('div', { style: `width:${pct}%` })),
+      el('strong', { class: 'nowrap' }, `${pct} %`)),
+    el('div', { class: 'small muted', style: 'margin-top:4px' },
+      `${lot.faits.toLocaleString('fr-FR')} / ${lot.total.toLocaleString('fr-FR')} fichier(s) traité(s)`,
+      lot.restants ? ` · ${lot.restants.toLocaleString('fr-FR')} restant(s)` : ' · terminé',
+      lot.vitesse_min ? ` · ${String(lot.vitesse_min).replace('.', ',')} fichiers/min` : '',
+      lot.restants && fin ? ` · fin estimée vers ${fin.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} (environ ${dureeTxt})` : '',
+      lot.restants && !lot.vitesse_min ? ' · en attente du poste de traitement' : '',
+      lot.erreurs ? ` · ${lot.erreurs} erreur(s)` : '', lot.a_mapper ? ` · ${lot.a_mapper} tableau(x) à confirmer` : '',
+      lot.doublons ? ` · ${lot.doublons} doublon(s) exact(s)` : ''));
 }
 
 async function viewBatch(view, id) {
   const container = el('div');
   view.appendChild(container);
   const draw = async () => {
-    const b = await api('GET', '/api/batches/' + id);
-    const pending = b.items.filter(i => ['en_attente', 'traitement'].includes(i.status)).length;
-    const counts = {};
-    b.items.forEach(i => { counts[i.status] = (counts[i.status] || 0) + 1; });
-    const done = b.items.length - pending;
+    const [b, prog] = await Promise.all([api('GET', '/api/batches/' + id), api('GET', '/api/progress?' + qs({})).catch(() => ({ lots: [] }))]);
+    const c = b.compteurs || {};
+    const pending = (c.en_attente || 0) + (c.traitement || 0);
+    const lot = (prog.lots || []).find(l => l.id === id) || { total: b.total, faits: b.total - pending, restants: pending, erreurs: c.erreur || 0,
+      a_mapper: c.correspondance || 0, doublons: c.doublon || 0, vitesse_min: null, fin_estimee: null };
+    const ws = workerState(b.worker_last_seen);
     container.replaceChildren(
       el('div', { class: 'row', style: 'align-items:center;margin-bottom:12px' }, el('h1', { style: 'margin:0' }, `Lot #${b.id}` + (b.label ? ' — ' + b.label : '')), el('div', { class: 'grow' }),
         el('a', { class: 'btn small', href: '#/factures?batch_id=' + id }, 'Voir les factures du lot'), el('a', { class: 'btn small', href: '#/imports' }, '← Imports')),
-      el('div', { class: 'panel' }, el('div', { class: 'row', style: 'align-items:center' }, el('div', { class: 'progress grow' }, el('div', { style: `width:${b.items.length ? done / b.items.length * 100 : 0}%` })),
-        el('span', {}, `${done} / ${b.items.length} traité(s)`), Object.entries(counts).map(([k, n]) => el('span', {}, badge('item', k), ' ', n)))),
-      el('div', { class: 'panel table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, ['#', 'Fichier / provenance', 'Type', 'Taille', 'Statut', 'Résultat', 'Factures', ''].map(h => el('th', {}, h)))),
+      el('div', { class: 'panel' }, progressBlock(lot),
+        el('div', { class: 'row', style: 'margin-top:8px' }, Object.entries(c).map(([k, n]) => el('span', {}, badge('item', k), ' ', n.toLocaleString('fr-FR'))),
+          el('span', { class: 'grow' }), el('span', { class: 'small' }, 'Poste de traitement : ', el('span', { class: 'badge ' + ws.cls }, ws.label)))),
+      el('div', { class: 'panel table-wrap' },
+        b.total > b.items.length ? el('p', { class: 'small muted' }, `${b.items.length} ligne(s) affichée(s) sur ${b.total.toLocaleString('fr-FR')} : erreurs et fichiers en cours d'abord, puis les plus récents.`) : null,
+        el('table', {}, el('thead', {}, el('tr', {}, ['#', 'Fichier / provenance', 'Type', 'Taille', 'Statut', 'Résultat', 'Factures', ''].map(h => el('th', {}, h)))),
         el('tbody', {}, b.items.map(it => el('tr', {}, el('td', {}, it.id),
           el('td', {}, el('div', {}, it.filename), it.provenance !== it.filename ? el('div', { class: 'small muted' }, it.provenance) : null),
           el('td', {}, it.kind || '—'), el('td', { class: 'nowrap' }, it.size ? (it.size / 1024).toFixed(0) + ' Ko' : '—'),
@@ -861,12 +911,12 @@ async function viewBatch(view, id) {
           el('td', { class: 'small' }, it.message || '', it.status === 'correspondance' && it.mapping && canWrite() ? mappingEditor(it) : null),
           el('td', {}, it.invoices_created ? el('a', { href: `#/factures?document_id=${it.document_id}&batch_id=${id}` }, it.invoices_created) : (it.status === 'doublon' && it.document_id ? el('a', { href: '#/factures?document_id=' + it.document_id }, 'voir l\'original') : '—')),
           el('td', {}, canWrite() && ['erreur', 'termine'].includes(it.status) && it.kind && it.kind !== 'zip' ? el('button', { class: 'small', onclick: () => act(() => api('POST', `/api/import-items/${it.id}/retry`), 'Relance programmée').then(draw) }, 'Relancer') : null,
-            canWrite() && it.status === 'erreur' && it.kind === 'zip' ? el('button', { class: 'small', onclick: () => act(() => api('POST', `/api/import-items/${it.id}/retry`)).then(draw) }, 'Relancer') : null)))))),
-      el('p', { class: 'small muted' }, 'La relance d\'un fichier remplace les factures issues de la tentative précédente (sans créer de doublon) tant qu\'elles n\'ont été ni validées ni réglées.'));
+            canWrite() && it.status === 'erreur' && it.kind === 'zip' ? el('button', { class: 'small', onclick: () => act(() => api('POST', `/api/import-items/${it.id}/retry`)).then(draw) }, 'Relancer') : null))))),
+        el('p', { class: 'small muted' }, 'La relance d\'un fichier remplace les factures issues de la tentative précédente (sans créer de doublon) tant qu\'elles n\'ont été ni validées ni réglées.')));
     return pending;
   };
   const pending = await draw();
-  if (pending) currentTimer = setInterval(async () => { if (!location.hash.startsWith('#/imports/' + id)) { clearInterval(currentTimer); return; } const p = await draw().catch(() => 0); if (!p) { clearInterval(currentTimer); updateReviewCount(); } }, 1500);
+  if (pending) currentTimer = setInterval(async () => { if (!location.hash.startsWith('#/imports/' + id)) { clearInterval(currentTimer); return; } const p = await draw().catch(() => 1); if (!p) { clearInterval(currentTimer); updateReviewCount(); } }, 5000);
 }
 
 function mappingEditor(it) {
@@ -1120,4 +1170,214 @@ function ignoreModal(r) {
   modal('Opération sans facture fournisseur', el('div', {}, el('p', {}, `${d(r.date)} — ${r.label} — ${money(r.amount, r.currency)}`),
     el('label', { class: 'f' }, 'Nature', cat), el('label', { class: 'f' }, 'Note', note)),
     [{ label: 'Classer hors factures', fn: async close => { await act(() => api('POST', `/api/bank/${r.id}/status`, { status: 'ignoree', category: cat.value, note: note.value })); close(); render(); } }]);
+}
+
+// ------------------------------------------------------------------ suivi des encaissements web
+// 3 niveaux : commande Shopify → transaction chez le prestataire → versement du prestataire → opération bancaire.
+L.psp_etat = { recu: ['Reçu', 'b-ok'], en_transit: ['En transit', 'b-info'], en_retard: ['En retard', 'b-bad'], ecart: ['Écart', 'b-bad'],
+  releve_manquant: ['Relevé à importer', 'b-warn'], negatif: ['Règlement négatif', 'b-warn'], echec: ['Échec', 'b-bad'] };
+L.psp_todo = { commande_introuvable: ['Commande introuvable chez le prestataire', 'b-bad'], ecart_montant: ['Écart de montant', 'b-warn'],
+  versement_retard: ['Versement non arrivé', 'b-bad'], ecart_versement: ['Écart de versement', 'b-bad'], litige: ['Litige / chargeback', 'b-warn'],
+  versement_negatif: ['Règlement négatif', 'b-warn'], credit_non_rattache: ['Crédit bancaire non rattaché', 'b-info'],
+  tiktok_sans_correspondance: ['Commandes TikTok sans n° TikTok', 'b-info'] };
+const PSP_KIND = { sale: 'Vente', capture: 'Capture', refund: 'Remboursement', charge: 'Paiement', chargeback: 'Chargeback', chargeback_hold: 'Fonds retenus (litige)',
+  chargeback_hold_release: 'Fonds libérés', adjustment: 'Ajustement', fee: 'Frais' };
+const PSP_STATUS = { paid: 'payé', in_transit: 'en transit', scheduled: 'programmé', pending: 'en attente', failed: 'échec' };
+const PSP_LINK = { reference: 'par référence', montant_date: 'montant + date', manuel: 'manuel' };
+const PSP_ACK = { cmd: 'Commande introuvable', ecart: 'Écart de montant', payout: 'Versement', litige: 'Litige', bank: 'Crédit bancaire', tiktok_sans_ref: 'Commandes TikTok sans n°' };
+const monthLabel = m => { const [y, mo] = m.split('-'); const s = new Date(+y, +mo - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }); return s.charAt(0).toUpperCase() + s.slice(1); };
+const pct = (a, b) => b ? (a / b * 100).toFixed(2).replace('.', ',') + ' %' : '—';
+
+async function viewEncaissements(view) {
+  const p = Object.assign({ tab: 'a-traiter', page: 1 }, getHashParams());
+  const go = np => { location.hash = '#/encaissements?' + new URLSearchParams(Object.fromEntries(Object.entries(np).filter(([, v]) => v !== '' && v !== null && v !== undefined))); };
+  const ov = await api('GET', '/api/psp/overview?' + qs({ month: p.month || '' }));
+  const month = ov.month;
+  view.append(el('h1', {}, 'Suivi des encaissements web'),
+    el('p', { class: 'muted' }, 'CA web par moyen d\'encaissement et contrôle des versements des prestataires, en trois niveaux : chaque commande Shopify doit se retrouver chez le prestataire, ',
+      'chaque transaction dans un versement, chaque versement sur un relevé bancaire. Le rattachement à la banque ne modifie pas l\'écran Banque.'));
+  // Barre : mois, recherche de commande, rapprochement
+  const monthSel = el('select', {}, ov.months.map(m => el('option', { value: m, selected: m === month ? 'selected' : null }, monthLabel(m))));
+  monthSel.addEventListener('change', () => go({ ...p, month: monthSel.value, page: 1 }));
+  const search = el('input', { type: 'search', placeholder: 'W-712345, n° de commande TikTok…', value: p.order || '' });
+  const doSearch = () => go({ ...p, order: search.value.trim() });
+  search.addEventListener('keydown', e => e.key === 'Enter' && doSearch());
+  view.appendChild(el('div', { class: 'panel' }, el('div', { class: 'row' },
+    el('label', { class: 'f' }, 'Mois', monthSel), el('label', { class: 'f grow' }, 'Rechercher une commande', search), el('button', { onclick: doSearch }, 'Afficher le parcours'),
+    canWrite() ? el('button', { onclick: () => act(() => api('POST', '/api/psp/match?' + qs({}))).then(r => {
+      toast(`Rapprochement : ${r.transactions_rattachees} transaction(s) rattachée(s), ${r.banque_par_reference + r.banque_par_montant} versement(s) retrouvé(s) en banque`); render(); }) }, 'Relancer le rapprochement') : null),
+    el('div', { class: 'small muted', style: 'margin-top:6px' }, ov.bank_last_date ? `Relevés bancaires importés jusqu'au ${d(ov.bank_last_date)}.` : 'Aucun relevé bancaire importé : les versements ne peuvent pas encore être contrôlés.')));
+  if (p.order) view.appendChild(await pspTracePanel(p.order, () => go({ ...p, order: '' })));
+  view.appendChild(pspCards(ov, p, go));
+  // Onglets
+  const nTodo = ov.providers.reduce((s, x) => s + x.n_anomalies, 0);
+  const nPay = ov.providers.reduce((s, x) => s + x.n_versements, 0);
+  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['parametres', 'Paramètres']];
+  if (canWrite() && !S.demo) tabs.push(['deposer', 'Déposer des exports']);
+  const body = el('div');
+  view.appendChild(el('div', { class: 'panel' }, el('div', { class: 'tabs' }, tabs.map(([k, l]) => el('button', { class: p.tab === k ? 'on' : '', onclick: () => go({ ...p, tab: k, page: 1, etat: '', kind: '' }) }, l))), body));
+  if (p.tab === 'versements') await pspPayoutsTab(body, p, go, ov);
+  else if (p.tab === 'parametres') pspSettingsTab(body, ov);
+  else if (p.tab === 'deposer') body.appendChild(uploadPanel({ title: 'Déposez les exports des prestataires', label: 'Exports encaissements web', accept: '.csv,.xlsx',
+    hint: 'Shopify : transactions des commandes, versements et transactions Shopify Payments, export Commandes (n° TikTok) — JUST (CSV) — TikTok Shop (income .xlsx). Reconnus automatiquement ; un export qui recouvre une période déjà chargée n\'ajoute que les nouveautés.',
+    note: 'Seules les colonnes utiles au rapprochement sont lues (jamais les noms ni e-mails des clients). Les fichiers sont traités par le poste de traitement comme les relevés bancaires.' }));
+  else await pspTodoTab(body, p, go, ov);
+}
+
+function pspCards(ov, p, go) {
+  const tracked = ov.providers.filter(x => x.tracked);
+  const others = ov.providers.filter(x => !x.tracked && x.ca_brut);
+  const tot = tracked.reduce((a, x) => ({ ca: a.ca + x.ca_brut, n: a.n + x.n_commandes, f: a.f + x.frais, v: a.v + x.verse, w: a.w + x.en_attente }), { ca: 0, n: 0, f: 0, v: 0, w: 0 });
+  const allCa = ov.providers.reduce((s, x) => s + x.ca_brut, 0);
+  const hasData = x => { const c = x.couverture || {}; return !!((c.transactions || {}).du || (c.versements || {}).du); };
+  const cov = x => { const c = x.couverture || {}; const r = (c.transactions || {}).du ? c.transactions : (c.versements || {}); return r.du ? `exports du ${d(r.du)} au ${d(r.au)}` : 'aucun export prestataire'; };
+  const card = x => el('div', { class: 'kpi psp-card' + (x.n_anomalies ? ' has-pb' : '') },
+    el('div', { class: 'psp-head' }, el('strong', {}, x.label),
+      x.n_anomalies ? el('a', { href: '#', class: 'badge b-bad', onclick: e => { e.preventDefault(); go({ ...p, tab: 'a-traiter', provider: x.code, kind: '' }); } }, `${x.n_anomalies} à traiter`)
+        : (!hasData(x) ? (x.n_commandes ? el('span', { class: 'badge b-warn' }, 'Aucun export') : null)
+          : el('span', { class: 'badge b-ok' }, 'RAS'))),
+    el('div', { class: 'v' }, money(x.ca_brut, 'EUR')),
+    el('div', { class: 's' }, `${x.n_commandes} commande(s)` + (x.remboursements ? ` · remboursé ${money(x.remboursements)}` : '')),
+    el('dl', { class: 'psp-lines' },
+      el('dt', {}, 'Frais'), el('dd', {}, x.frais ? `${money(x.frais)} (${pct(x.frais, x.ca_brut)})` : '—'),
+      el('dt', {}, 'Versé'), el('dd', {}, money(x.verse) + (x.n_versements ? ` · ${x.n_versements} vers.` : '')),
+      el('dt', {}, 'Reçu en banque'), el('dd', { class: x.verse && x.recu_banque < x.verse ? 'warn' : '' }, money(x.recu_banque) + (x.n_versements ? ` · ${x.n_recus}/${x.n_versements}` : '')),
+      el('dt', {}, 'En attente'), el('dd', {}, money(x.en_attente))),
+    el('div', { class: 'small muted' }, cov(x)));
+  return el('div', {},
+    el('div', { class: 'row', style: 'align-items:baseline;margin-bottom:8px' }, el('h2', { style: 'margin:0' }, monthLabel(ov.month)),
+      el('span', { class: 'muted' }, `CA web ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')} (${tot.n} commandes) · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
+    el('div', { class: 'psp-cards' }, tracked.map(card)),
+    others.length ? el('div', { class: 'small muted', style: 'margin:-6px 0 16px' }, 'Sans versement suivi : ', others.map(x => `${x.label} ${money(x.ca_brut, 'EUR')} (${x.n_commandes} cmd)`).join(' · ')) : null);
+}
+
+function pspProviderSelect(ov, value, onChange) {
+  const s = el('select', {}, el('option', { value: '' }, 'Tous les prestataires'), ov.providers.filter(x => x.tracked).map(x => el('option', { value: x.code, selected: x.code === value ? 'selected' : null }, x.label)));
+  s.addEventListener('change', () => onChange(s.value));
+  return s;
+}
+
+async function pspTodoTab(body, p, go, ov) {
+  const data = await api('GET', '/api/psp/todo?' + qs({ month: ov.month, provider: p.provider || '', kind: p.kind || '', limit: 300 }));
+  const c = data.compteurs || {};
+  const chips = el('div', { class: 'row', style: 'gap:6px;margin-bottom:10px' },
+    el('button', { class: 'small' + (!p.kind ? ' primary' : ''), onclick: () => go({ ...p, kind: '' }) }, `Tout (${Object.values(c).reduce((s, n) => s + n, 0)})`),
+    Object.keys(L.psp_todo).filter(k => c[k]).map(k => el('button', { class: 'small' + (p.kind === k ? ' primary' : ''), onclick: () => go({ ...p, kind: k }) }, `${L.psp_todo[k][0]} (${c[k]})`)));
+  body.append(el('div', { class: 'row', style: 'margin-bottom:10px' }, el('label', { class: 'f' }, 'Prestataire', pspProviderSelect(ov, p.provider, v => go({ ...p, provider: v })))), chips);
+  if (!data.rows.length) { body.appendChild(el('div', { class: 'empty' }, 'Rien à traiter pour ce mois.')); }
+  else {
+    body.appendChild(el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ['Point', 'Prestataire', 'Date', 'Commande / réf.', 'Montant', 'Détail', ''].map((h, i) => el('th', { class: i === 4 ? 'num' : '' }, h)))),
+      el('tbody', {}, data.rows.map(r => el('tr', {},
+        el('td', {}, badge('psp_todo', r.kind)), el('td', { class: 'small' }, r.provider_label), el('td', { class: 'nowrap' }, d(r.day)),
+        el('td', { class: 'mono' }, r.order_name ? el('a', { href: '#', onclick: e => { e.preventDefault(); go({ ...p, order: r.order_name }); } }, r.order_name) : (r.ref || '—')),
+        el('td', { class: 'num' }, money(r.amount)), el('td', { class: 'small', style: 'max-width:420px' }, r.message),
+        el('td', { class: 'nowrap' },
+          canWrite() && r.payout_id && r.kind === 'versement_retard' ? el('button', { class: 'small', onclick: () => pspLinkModal({ id: r.payout_id, provider_label: r.provider_label, payout_date: r.day, amount: r.amount }) }, 'Rattacher…') : null,
+          canWrite() ? el('button', { class: 'small', onclick: () => promptBox('Lever ce point', `${L.psp_todo[r.kind][0]} — ${r.order_name || r.ref || ''} ${money(r.amount)}. Expliquez pourquoi ce point est réglé (obligatoire, historisé).`,
+            'Lever le point', comment => api('POST', '/api/psp/ack?' + qs({}), { key: r.key, comment }).then(render)) }, 'Lever…') : null)))))));
+    if (data.total > data.rows.length) body.appendChild(el('div', { class: 'small muted', style: 'margin-top:6px' }, `${data.rows.length} premiers points affichés sur ${data.total}. Filtrez par prestataire ou par type.`));
+  }
+  const acks = await api('GET', '/api/psp/acks?' + qs({})).catch(() => []);
+  if (acks.length) body.appendChild(el('details', { style: 'margin-top:14px' }, el('summary', { class: 'small muted' }, `Points levés (${acks.length})`),
+    el('table', {}, el('tbody', {}, acks.slice(0, 200).map(a => el('tr', {}, el('td', { class: 'small' }, PSP_ACK[a.kind] || a.kind), el('td', { class: 'mono' }, a.key.split(':').slice(1).join(' · ')),
+      el('td', { class: 'small' }, a.comment), el('td', { class: 'small muted' }, `${a.user_name || 'système'} — ${dt(a.created_at)}`),
+      el('td', {}, canWrite() ? el('button', { class: 'small', onclick: () => act(() => api('POST', '/api/psp/unack?' + qs({}), { key: a.key })).then(render) }, 'Rétablir') : null)))))));
+}
+
+async function pspPayoutsTab(body, p, go, ov) {
+  const data = await api('GET', '/api/psp/payouts?' + qs({ month: ov.month, provider: p.provider || '', etat: p.etat || '', page: p.page || 1, per_page: 50 }));
+  const c = data.compteurs || {};
+  body.append(el('div', { class: 'row', style: 'margin-bottom:10px' }, el('label', { class: 'f' }, 'Prestataire', pspProviderSelect(ov, p.provider, v => go({ ...p, provider: v, page: 1 })))),
+    el('div', { class: 'row', style: 'gap:6px;margin-bottom:10px' },
+      el('button', { class: 'small' + (!p.etat ? ' primary' : ''), onclick: () => go({ ...p, etat: '', page: 1 }) }, `Tous (${Object.values(c).reduce((s, n) => s + n, 0)})`),
+      Object.keys(L.psp_etat).filter(k => c[k]).map(k => el('button', { class: 'small' + (p.etat === k ? ' primary' : ''), onclick: () => go({ ...p, etat: k, page: 1 }) }, `${L.psp_etat[k][0]} (${c[k]})`))));
+  if (!data.rows.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucun versement ce mois-ci.')); return; }
+  body.appendChild(el('div', { class: 'table-wrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, ['Date', 'Prestataire', 'Référence', 'Statut prestataire', 'Montant', 'Frais', 'Transactions', 'Banque', 'État', ''].map((h, i) => el('th', { class: [4, 5].includes(i) ? 'num' : '' }, h)))),
+    el('tbody', {}, data.rows.map(r => el('tr', {},
+      el('td', { class: 'nowrap' }, d(r.payout_date)), el('td', { class: 'small' }, r.provider_label),
+      el('td', { class: 'mono' }, r.bank_ref || r.ext_id || '—'), el('td', { class: 'small' }, PSP_STATUS[r.status] || r.status),
+      el('td', { class: 'num' }, money(r.amount)), el('td', { class: 'num' }, r.fees === null ? '—' : money(r.fees)),
+      el('td', { class: 'small' }, r.n_tx ? `${r.n_tx} · ${money(r.sum_tx)}` : '—'),
+      el('td', { class: 'small', style: 'max-width:300px' }, r.bank_transaction_id ? [el('div', {}, `${d(r.bank_date)} — ${money(r.bank_amount)}`), el('div', { class: 'muted' }, r.bank_label), el('div', { class: 'muted' }, PSP_LINK[r.link_mode] || r.link_mode)]
+        : el('span', { class: 'muted' }, `attendu au plus tard le ${d(r.expected_by)}`)),
+      el('td', {}, badge('psp_etat', r.etat)),
+      el('td', { class: 'nowrap' }, !canWrite() || r.amount <= 0 ? null : r.bank_transaction_id
+        ? el('button', { class: 'small', onclick: () => confirmBox('Détacher de l\'opération bancaire', 'Le lien sera supprimé (historisé). Un lien automatique détaché ne sera plus proposé.', 'Détacher',
+            () => act(() => api('POST', `/api/psp/payouts/${r.id}/unlink`, {})).then(render)) }, 'Détacher')
+        : el('button', { class: 'small', onclick: () => pspLinkModal(r) }, 'Rattacher…'))))))));
+  const pages = Math.max(1, Math.ceil(data.total / data.per_page));
+  body.appendChild(el('div', { class: 'pager' }, el('button', { disabled: data.page <= 1 ? true : null, onclick: () => go({ ...p, page: data.page - 1 }) }, '‹ Précédent'),
+    el('span', {}, `Page ${data.page} / ${pages} — ${data.total} versement(s)`), el('button', { disabled: data.page >= pages ? true : null, onclick: () => go({ ...p, page: data.page + 1 }) }, 'Suivant ›')));
+}
+
+async function pspLinkModal(r) {
+  const cands = await act(() => api('GET', `/api/psp/payouts/${r.id}/candidates`));
+  const comment = el('input', { placeholder: 'Commentaire (facultatif)' });
+  let close = null;
+  const list = cands.length ? el('table', {}, el('tbody', {}, cands.map(c => el('tr', {},
+    el('td', { class: 'nowrap' }, d(c.date)), el('td', { class: 'small' }, c.label, c.deja_rattache ? el('div', { class: 'muted' }, `déjà rattaché : ${money(c.deja_rattache)}`) : null),
+    el('td', { class: 'num' }, money(c.amount), c.meme_montant ? el('div', {}, el('span', { class: 'badge b-ok' }, 'même montant')) : null),
+    el('td', {}, el('button', { class: 'small primary', onclick: async () => {
+      await act(() => api('POST', `/api/psp/payouts/${r.id}/link`, { bank_transaction_id: c.id, comment: comment.value }), 'Versement rattaché');
+      close(); render(); } }, 'Rattacher'))))))
+    : el('div', { class: 'empty' }, 'Aucun crédit bancaire proche (date ou montant) n\'est disponible. Importez le relevé de la période.');
+  close = modal('Rattacher le versement à une opération bancaire', el('div', {},
+    el('p', {}, `${r.provider_label} — versement du ${d(r.payout_date)} : ${money(r.amount, 'EUR')}`),
+    el('p', { class: 'small muted' }, 'Crédits bancaires du J−5 au J+20, de même montant (à 5 % près) ou au libellé du prestataire. L\'opération bancaire elle-même n\'est pas modifiée.'),
+    list, el('label', { class: 'f', style: 'margin-top:10px' }, 'Commentaire', comment)), []);
+}
+
+function pspSettingsTab(body, ov) {
+  const admin = isAdmin();
+  body.append(el('p', { class: 'small muted' }, 'Délai de versement : nombre de jours tolérés entre la date annoncée par le prestataire et l\'arrivée en banque, au-delà duquel le versement est signalé en retard. ',
+    'Délai commande : âge minimal d\'une commande avant de la signaler introuvable chez le prestataire. Fenêtre banque : rapprochement par montant entre J et J + n. ',
+    'Motif : texte (expression régulière) cherché dans le libellé bancaire, en majuscules sans accents.'));
+  body.appendChild(el('div', { class: 'table-wrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, ['Prestataire', 'Délai versement (j)', 'Délai commande (j)', 'Fenêtre banque (j)', 'Motif du libellé', 'Exclure', ''].map(h => el('th', {}, h)))),
+    el('tbody', {}, ov.providers.filter(x => x.tracked).map(x => {
+      const f = {};
+      const inp = (k, w) => (f[k] = el('input', { value: x[k] === null || x[k] === undefined ? '' : x[k], style: `width:${w}px`, disabled: admin ? null : true }));
+      return el('tr', {}, el('td', {}, x.label), el('td', {}, inp('payout_delay_days', 60)), el('td', {}, inp('order_delay_days', 60)), el('td', {}, inp('bank_window_days', 60)),
+        el('td', {}, inp('bank_pattern', 160)), el('td', {}, inp('bank_exclude', 110)),
+        el('td', {}, admin ? el('button', { class: 'small', onclick: () => {
+          const ch = {};
+          for (const [k, i] of Object.entries(f)) if (String(i.value) !== String(x[k] === null || x[k] === undefined ? '' : x[k])) ch[k] = i.value;
+          if (!Object.keys(ch).length) return toast('Aucune modification');
+          act(() => api('POST', `/api/psp/providers/${x.code}`, ch), 'Paramètres enregistrés').then(render);
+        } }, 'Enregistrer') : null));
+    })))));
+  if (!admin) body.appendChild(el('p', { class: 'small muted' }, 'Seuls les administrateurs modifient ces paramètres.'));
+}
+
+async function pspTracePanel(order, onClose) {
+  const panel = el('div', { class: 'panel' });
+  let t;
+  try { t = await api('GET', '/api/psp/order?' + qs({ order })); }
+  catch (e) { panel.append(el('div', { class: 'callout bad' }, e.message), el('button', { class: 'small', onclick: onClose }, 'Fermer')); return panel; }
+  const empty = !t.shopify.length && !t.transactions.length;
+  const ok = (cond, txt) => el('span', { class: 'badge ' + (cond ? 'b-ok' : 'b-bad') }, txt);
+  const tracked = t.shopify.some(s => s.tracked);
+  const col = (title, status, content) => el('div', { class: 'psp-step' }, el('div', { class: 'psp-step-h' }, el('strong', {}, title), status), content);
+  panel.append(el('div', { class: 'row', style: 'align-items:center;margin-bottom:10px' }, el('h2', { style: 'margin:0' }, `Commande ${t.order_name}`),
+    t.refs.length ? el('span', { class: 'small muted' }, 'n° TikTok ' + t.refs.map(r => r.ext_order_id).join(', ')) : null, el('div', { class: 'grow' }),
+    el('button', { class: 'small', onclick: onClose }, 'Fermer')));
+  if (empty) { panel.appendChild(el('div', { class: 'empty' }, 'Aucune donnée importée pour cette commande (vérifiez le n° ou importez les exports de la période).')); return panel; }
+  panel.appendChild(el('div', { class: 'psp-steps' },
+    col('1. Shopify', ok(t.shopify.length, t.shopify.length ? 'payée' : 'absente'), t.shopify.length ? el('table', {}, el('tbody', {}, t.shopify.map(s => el('tr', {},
+      el('td', { class: 'small nowrap' }, dt(s.tx_at)), el('td', { class: 'small' }, `${PSP_KIND[s.kind] || s.kind} · ${s.provider_label}`), el('td', { class: 'num' }, money(s.amount))))))
+      : el('div', { class: 'small muted' }, 'Commande absente de l\'export Shopify importé.')),
+    col('2. Prestataire', tracked || t.transactions.length ? ok(t.transactions.length, t.transactions.length ? 'retrouvée' : 'introuvable') : el('span', { class: 'badge' }, 'non suivi'),
+      t.transactions.length ? el('table', {}, el('tbody', {}, t.transactions.map(x => el('tr', {},
+        el('td', { class: 'small nowrap' }, d(x.tx_at)), el('td', { class: 'small' }, `${PSP_KIND[x.kind] || x.kind} · ${x.provider_label}`),
+        el('td', { class: 'num' }, money(x.gross), x.fee ? el('div', { class: 'small muted' }, `frais ${money(x.fee)} · net ${money(x.net)}`) : null)))))
+        : el('div', { class: 'small muted' }, tracked ? 'Aucune transaction chez le prestataire dans les exports importés.' : 'Moyen d\'encaissement sans versement suivi.')),
+    col('3. Versement → banque', t.payouts.length ? (t.payouts.every(v => v.etat === 'recu') ? ok(true, 'reçu') : badge('psp_etat', t.payouts[0].etat)) : el('span', { class: 'badge' }, '—'),
+      t.payouts.length ? el('div', {}, t.payouts.map(v => el('div', { class: 'small', style: 'margin-bottom:6px' },
+        el('div', {}, `${v.provider_label} — versement du ${d(v.payout_date)} : ${money(v.amount)} `, badge('psp_etat', v.etat)),
+        v.bank_transaction_id ? el('div', { class: 'muted' }, `Banque ${d(v.bank_date)} — ${money(v.bank_amount)} — ${v.bank_label}`) : el('div', { class: 'muted' }, `Pas encore sur les relevés (attendu au plus tard le ${d(v.expected_by)})`))))
+        : el('div', { class: 'small muted' }, t.transactions.some(x => x.payout_date) ? `Versement prévu le ${d(t.transactions.find(x => x.payout_date).payout_date)}` : 'Pas encore de versement.'))));
+  if (t.anomalies.length) panel.appendChild(el('div', { style: 'margin-top:8px' }, t.anomalies.map(a => el('div', { class: 'anomaly alerte' }, el('div', {}, el('strong', {}, (L.psp_todo[a.kind] || [a.kind])[0]), ' — ', a.message)))));
+  return panel;
 }

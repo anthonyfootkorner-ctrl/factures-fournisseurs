@@ -213,6 +213,20 @@ async function apiRoute(method, url, body) {
   if (method === 'POST' && R(/^\/api\/bank\/reconcile-sure$/)) return SB.rpc('bank_reconcile_sure', { p_ids: body.ids });
   if (method === 'PATCH' && R(/^\/api\/bank-accounts\/(\d+)$/)) return SB.rpc('bank_account_update', { p_id: +m[1], p: body });
   if (method === 'GET' && R(/^\/api\/treasury$/)) return SB.rpc('treasury', { p_demo: demo });
+  if (method === 'GET' && R(/^\/api\/progress$/)) return SB.rpc('import_progress', { p_demo: demo });
+  // Suivi des encaissements web
+  if (method === 'GET' && R(/^\/api\/psp\/overview$/)) return SB.rpc('psp_overview', { p: q });
+  if (method === 'GET' && R(/^\/api\/psp\/payouts$/)) return SB.rpc('psp_payouts_list', { p: q });
+  if (method === 'GET' && R(/^\/api\/psp\/todo$/)) return SB.rpc('psp_todo', { p: q });
+  if (method === 'GET' && R(/^\/api\/psp\/order$/)) return SB.rpc('psp_order_trace', { p: q });
+  if (method === 'GET' && R(/^\/api\/psp\/acks$/)) return SB.rpc('psp_acks_list', { p_demo: demo });
+  if (method === 'GET' && R(/^\/api\/psp\/payouts\/(\d+)\/candidates$/)) return SB.rpc('psp_bank_candidates', { p_payout: +m[1] });
+  if (method === 'POST' && R(/^\/api\/psp\/payouts\/(\d+)\/link$/)) return SB.rpc('psp_payout_link', { p_payout: +m[1], p_bank_tx: +body.bank_transaction_id, p_comment: body.comment || null });
+  if (method === 'POST' && R(/^\/api\/psp\/payouts\/(\d+)\/unlink$/)) return SB.rpc('psp_payout_unlink', { p_payout: +m[1], p_comment: (body && body.comment) || null });
+  if (method === 'POST' && R(/^\/api\/psp\/match$/)) return SB.rpc('psp_match_run', { p_demo: demo });
+  if (method === 'POST' && R(/^\/api\/psp\/ack$/)) return SB.rpc('psp_ack', { p_demo: demo, p_key: body.key, p_comment: body.comment });
+  if (method === 'POST' && R(/^\/api\/psp\/unack$/)) return SB.rpc('psp_unack', { p_demo: demo, p_key: body.key });
+  if (method === 'POST' && R(/^\/api\/psp\/providers\/([a-z_]+)$/)) return SB.rpc('psp_provider_update', { p_code: m[1], p: body });
   throw new Error('Route inconnue : ' + method + ' ' + path);
 }
 
