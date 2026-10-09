@@ -128,6 +128,22 @@ const NAV = [
   ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/encaissements', 'Suivi encaissements web'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
 ];
 let reviewCount = null;
+const ICONS = {
+  '#/': 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
+  '#/synthese': 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  '#/factures': 'M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h6',
+  '#/a-verifier': 'M9 11l3 3 7-7M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
+  '#/fournisseurs': 'M3 21V8l9-5 9 5v13M9 21v-6h6v6M3 21h18',
+  '#/banque': 'M3 10l9-6 9 6M5 10v8M10 10v8M14 10v8M19 10v8M3 21h18',
+  '#/encaissements': 'M2 7h20v12H2zM2 11h20M6 15h4',
+  '#/imports': 'M12 3v12M7 10l5 5 5-5M4 21h16',
+  '#/parametres': 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+  facture: 'M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h6', paye: 'M20 6L9 17l-5-5', reste: 'M12 7v5l3 3M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z',
+};
+function icon(key, cls) {
+  return svg('svg', { viewBox: '0 0 24 24', class: cls || 'ico', fill: 'none', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' },
+    svg('path', { d: ICONS[key] || ICONS['#/'] }));
+}
 
 async function boot() {
   S.user = null;
@@ -173,21 +189,34 @@ async function render() {
   await loadLookups().catch(() => {});
   const hash = location.hash || '#/';
   const main = el('main', { class: 'main' });
-  const nav = el('nav', {}, NAV.map(([h, label]) => {
+  const nav = el('nav', { class: 'topnav' }, NAV.map(([h, label]) => {
     const active = h === '#/' ? hash === '#/' || hash === '' : hash.startsWith(h);
-    const a = el('a', { href: h, class: active ? 'active' : '' }, label);
+    const a = el('a', { href: h, class: active ? 'active' : '' }, el('span', { class: 'lbl' }, label));
     if (h === '#/a-verifier') a.appendChild(el('span', { class: 'count', id: 'review-count', style: 'display:none' }));
     return a;
   }));
   const demoBtn = el('button', { class: 'small', onclick: () => { S.demo = !S.demo; try { localStorage.setItem('sf_demo', S.demo ? '1' : '0'); } catch (e) {} render(); } },
     S.demo ? 'Revenir aux données réelles' : 'Voir les données de démo');
-  const side = el('aside', { class: 'side' },
-    el('div', { class: 'logo' }, 'Factures fournisseurs', el('small', {}, 'Suivi & règlements')),
-    nav,
-    el('div', { class: 'foot' }, el('div', {}, S.user.name), el('div', {}, L.role[S.user.role]), demoBtn, ' ',
-      el('button', { class: 'small', onclick: async () => { await SB.logout(); S.user = null; render(); } }, 'Se déconnecter'),
-      ' ', el('button', { class: 'small', onclick: changeOwnPassword }, 'Mot de passe')));
-  app.replaceChildren(el('div', { class: 'layout' }, side, main));
+  // Menu du compte (déroulant) à droite de l'en-tête
+  const menu = el('div', { class: 'acct-menu', hidden: true }, el('div', { class: 'who' }, S.user.name), el('div', { class: 'muted small' }, L.role[S.user.role]),
+    demoBtn, el('button', { class: 'small', onclick: changeOwnPassword }, 'Mot de passe'),
+    el('button', { class: 'small', onclick: async () => { await SB.logout(); S.user = null; render(); } }, 'Se déconnecter'));
+  const acctBtn = el('button', { class: 'acct', title: S.user.name, onclick: e => { e.stopPropagation(); menu.hidden = !menu.hidden; } },
+    svg('svg', { viewBox: '0 0 24 24', class: 'ico', fill: 'none', 'stroke-width': '1.8', 'stroke-linecap': 'round' },
+      svg('circle', { cx: '12', cy: '8', r: '4' }), svg('path', { d: 'M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6' })));
+  menu.addEventListener('click', e => e.stopPropagation());
+  if (!window.__acctMenuClose) {  // un clic ailleurs referme le menu du compte (écouteur posé une seule fois)
+    window.__acctMenuClose = true;
+    document.addEventListener('click', () => { const m = document.querySelector('.acct-menu'); if (m) m.hidden = true; });
+  }
+  const header = el('header', { class: 'topbar' },
+    el('div', { class: 'topmain' },
+      el('a', { href: '#/', class: 'brand', title: 'Tableau de bord' }, el('img', { src: 'logo-blanc.png', alt: 'Foot Korner', class: 'brand-logo' }),
+        el('span', { class: 'brand-name' }, 'Foot Korner', el('small', {}, 'Factures fournisseurs'))),
+      nav,
+      el('div', { class: 'acct-wrap' }, S.demo ? el('span', { class: 'demo-pill' }, 'Démo') : null, acctBtn, menu)));
+  app.replaceChildren(el('div', { class: 'layout top' }, header, main));
+  const act0 = nav.querySelector('a.active'); if (act0 && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = act0.offsetLeft - 14;  // menu défilant : page active visible
   if (S.demo) main.appendChild(el('div', { class: 'demo-banner' }, 'MODE DÉMONSTRATION — données fictives, séparées des données réelles'));
   const banner = el('div');
   main.appendChild(banner);
@@ -270,7 +299,7 @@ function barChart(items, opts = {}) {
   const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img' });
   for (let t = 0; t <= 4; t++) {
     const y = padT + (H - padT - padB) * (1 - t / 4);
-    g.appendChild(svg('line', { x1: padL, x2: W - 6, y1: y, y2: y, stroke: '#eef0f3' }));
+    g.appendChild(svg('line', { x1: padL, x2: W - 6, y1: y, y2: y, class: 'grid' }));
     g.appendChild(svg('text', { x: padL - 6, y: y + 4, 'text-anchor': 'end' }, shortMoney(max * t / 4)));
   }
   items.forEach((it, i) => {
@@ -298,26 +327,58 @@ function periodePreset(k) {
   if (k === '12mois') return [new Date(y, m - 11, 1), new Date(y, m + 1, 0)];
   return null;
 }
+const FAMILLES = { textile: 'Textile', charges_fixes: 'Charges fixes', autre: 'Autres' };
+function famLabels(v) { return (v || '').split(',').filter(Boolean).map(k => FAMILLES[k] || k); }
+// Colonne de filtres (droite) : familles de fournisseurs (plusieurs cochables), exercice fiscal, raccourcis, dates, société, fournisseur
+function filtersAside(p, go, o = {}) {
+  const sel = (p.famille || '').split(',').filter(Boolean);
+  const toggle = k => go({ ...p, famille: (sel.includes(k) ? sel.filter(x => x !== k) : Object.keys(FAMILLES).filter(x => sel.includes(x) || x === k)).join(',') });
+  const famBox = el('div', { class: 'f-checks' }, Object.entries(FAMILLES).map(([k, l]) => el('label', { class: 'f-check fam-' + k + (sel.includes(k) ? ' on' : '') },
+    el('input', { type: 'checkbox', checked: sel.includes(k) ? 'checked' : null, onchange: () => toggle(k) }), el('span', {}, l))));
+  const from = el('input', { type: 'date', value: p.from || '' }), to = el('input', { type: 'date', value: p.to || '' });
+  const isCur = (a, b) => !p.tout && p.from === isoDate(a) && p.to === isoDate(b);
+  const preset = (k, label) => { const [a, b] = periodePreset(k);
+    return el('button', { class: 'small' + (isCur(a, b) ? ' primary' : ''), onclick: () => go({ ...p, tout: '', from: isoDate(a), to: isoDate(b) }) }, label); };
+  const ec = exerciceCourant();
+  const fyTile = y => { const [a, b] = exercice(y);
+    return el('button', { class: 'fy-tile' + (isCur(a, b) ? ' on' : ''), onclick: () => go({ ...p, tout: '', from: isoDate(a), to: isoDate(b) }) },
+      el('span', { class: 'fy-y' }, `${y}-${String(y + 1).slice(2)}`), el('span', { class: 'fy-d' }, `juin ${y} → mai ${y + 1}`), y === ec ? el('span', { class: 'fy-cur' }, 'en cours') : null); };
+  const optSel = (key, label, options) => { const sl = el('select', { onchange: () => go({ ...p, [key]: sl.value }) }, el('option', { value: '' }, 'Tous'),
+      options.map(([v, l]) => el('option', { value: v, selected: String(p[key] || '') === String(v) ? 'selected' : null }, l))); return [el('div', { class: 'f-label' }, label), sl]; };
+  return el('aside', { class: 'synth-filters' }, el('h2', {}, 'Filtres'),
+    el('div', { class: 'f-label' }, 'Famille de fournisseurs'), famBox,
+    o.fiscal ? [el('div', { class: 'f-label' }, 'Exercice fiscal'), el('div', { class: 'fy-grid' }, [ec - 2, ec - 1, ec].map(fyTile),
+      el('button', { class: 'fy-tile' + (p.tout ? ' on' : ''), onclick: () => go({ ...p, from: '', to: '', tout: '1' }) }, el('span', { class: 'fy-y' }, 'Tout'), el('span', { class: 'fy-d' }, 'toutes périodes')))] : null,
+    o.presets ? [el('div', { class: 'f-label' }, 'Raccourcis'), el('div', { class: 'f-chips' }, preset('mois', 'Ce mois'), preset('mois_prec', 'Mois dernier'), preset('trimestre', 'Ce trimestre'), preset('12mois', '12 derniers mois'))] : null,
+    el('div', { class: 'f-label' }, o.dateLabel || 'Dates de facture'),
+    el('div', { class: 'f-dates' }, el('label', { class: 'f' }, 'Du', from), el('label', { class: 'f' }, 'Au', to)),
+    el('button', { class: 'primary small f-apply', onclick: () => go({ ...p, tout: '', from: from.value, to: to.value }) }, 'Appliquer les dates'),
+    o.company ? optSel('company_id', 'Société facturée', S.lookups.companies.map(c => [c.id, c.name])) : null,
+    o.supplier ? optSel('supplier_id', 'Fournisseur', S.lookups.suppliers.map(x => [x.id, x.name])) : null,
+    el('button', { class: 'small f-reset', onclick: () => go({}) }, 'Réinitialiser les filtres'),
+    o.note ? el('p', { class: 'muted small f-note' }, o.note) : null);
+}
+// Exercice fiscal Foot Korner : du 1er juin au 31 mai
+function exercice(startYear) { return [new Date(startYear, 5, 1), new Date(startYear + 1, 4, 31)]; }
+function exerciceCourant() { const t = new Date(); return t.getMonth() >= 5 ? t.getFullYear() : t.getFullYear() - 1; }
 async function viewSynthese(view) {
   const p = getHashParams();
-  if (!p.from && !p.to) { const [a, b] = periodePreset('annee'); p.from = isoDate(a); p.to = isoDate(b); }
+  const ec = exerciceCourant();
+  if (!p.from && !p.to && !p.tout) { const [a, b] = exercice(ec); p.from = isoDate(a); p.to = isoDate(b); }
   const go = np => { location.hash = '#/synthese?' + new URLSearchParams(Object.fromEntries(Object.entries(np).filter(([, v]) => v))); };
-  const from = el('input', { type: 'date', value: p.from || '' }), to = el('input', { type: 'date', value: p.to || '' });
-  const preset = (k, label) => el('button', { class: 'small', onclick: () => { const [a, b] = periodePreset(k); go({ ...p, from: isoDate(a), to: isoDate(b) }); } }, label);
-  view.append(el('h1', {}, 'Synthèse des factures fournisseurs'),
-    el('div', { class: 'panel synth-periode' },
-      el('div', { class: 'row' }, preset('mois', 'Ce mois'), preset('mois_prec', 'Mois dernier'), preset('trimestre', 'Ce trimestre'),
-        preset('annee', 'Cette année'), preset('12mois', '12 derniers mois'), el('button', { class: 'small', onclick: () => go({ ...p, from: '', to: '' , tout: '1' }) }, 'Tout')),
-      el('div', { class: 'row' }, el('label', { class: 'f' }, 'Factures datées du', from), el('label', { class: 'f' }, 'au', to),
-        el('button', { class: 'primary small', onclick: () => go({ ...p, from: from.value, to: to.value }) }, 'Afficher')),
-      el('div', { class: 'row' }, el('span', { class: 'muted' }, 'Fournisseurs :'),
-        [['', 'Tous'], ['textile', 'Textile'], ['autre', 'Autres']].map(([v, l]) => el('button', { class: 'small' + ((p.famille || '') === v ? ' primary' : ''), onclick: () => go({ ...p, famille: v }) }, l))),
-      el('div', { class: 'muted small' }, 'Période = date des factures. Le reste à régler est réparti selon la semaine d\'échéance (du lundi au dimanche). Famille textile = catégorie « Textile » dans Pennylane.')));
-  const q = Object.assign(p.tout ? {} : { from: p.from, to: p.to }, p.famille ? { famille: p.famille } : {});
+  const filters = filtersAside(p, go, { fiscal: true, presets: true, company: true, supplier: true,
+    note: 'Période = date des factures. Le reste à régler est réparti par semaine d\'échéance (lundi → dimanche). Famille = classement du fournisseur (catégories Pennylane, modifiable sur sa fiche).' });
+  const periodeTxt = (p.tout ? 'Toutes périodes' : `Factures du ${d(p.from)} au ${d(p.to)}`) + (p.famille ? ' · ' + famLabels(p.famille).join(' + ') : '');
+  const left = el('div', { class: 'synth-main' });
+  view.append(el('div', { class: 'crumb' }, el('a', { href: '#/' }, 'Tableau de bord'), ' / ', 'Synthèse'),
+    el('h1', {}, 'Synthèse des factures fournisseurs'), el('div', { class: 'muted page-sub' }, periodeTxt),
+    el('div', { class: 'synth-layout' }, left, filters));
+  view = left;
+  const q = Object.fromEntries(Object.entries(Object.assign(p.tout ? {} : { from: p.from, to: p.to }, { famille: p.famille, company_id: p.company_id, supplier_id: p.supplier_id })).filter(([, v]) => v));
   const data = await api('GET', '/api/synthese?' + qs(q));
   const curs = Object.keys(data.currencies);
   if (!curs.length) { view.appendChild(el('div', { class: 'panel empty' }, 'Aucune facture sur cette période.')); return; }
-  const listLink = extra => '#/factures?' + new URLSearchParams(Object.fromEntries(Object.entries({ ...q, famille: '', doc_type: 'facture', ...extra }).filter(([, v]) => v)));
+  const listLink = extra => '#/factures?' + new URLSearchParams(Object.fromEntries(Object.entries({ ...q, doc_type: 'facture', ...extra }).filter(([, v]) => v)));
   const addDays = (iso, n) => { const x = new Date(iso + 'T12:00:00'); x.setDate(x.getDate() + n); return isoDate(x); };
   for (const cur of curs) {
     const c = data.currencies[cur];
@@ -325,22 +386,26 @@ async function viewSynthese(view) {
     if (curs.length > 1) box.appendChild(el('h2', {}, 'Devise : ' + cur));
     const retard = (c.semaines.find(s => s.semaine === 'retard') || {}).montant || 0;
     const pct = c.facture.ttc ? Math.round(c.paye.montant / c.facture.ttc * 100) : 0;
-    const big = (lab, v, sub, cls, href) => el('a', { class: 'kpi big ' + (cls || ''), href: href || null }, el('div', { class: 'l' }, lab), el('div', { class: 'v' }, money(v, cur)), sub ? el('div', { class: 's' }, sub) : null);
+    const big = (lab, v, sub, cls, href, ic) => el('a', { class: 'kpi big ' + (cls || ''), href: href || null }, el('div', { class: 'ic' }, icon(ic, 'kic')),
+      el('div', { class: 'l' }, lab), el('div', { class: 'v' }, money(v, cur)), sub ? el('div', { class: 's' }, sub) : null);
     box.appendChild(el('div', { class: 'kpis synth-kpis' },
-      big('Facturé (TTC)', c.facture.ttc, `${c.facture.n} facture(s)` + (c.avoirs.n ? ` — avoirs : ${money(c.avoirs.ttc, cur)}` : '') + (c.sans_montant ? ` — ${c.sans_montant} sans montant lu` : ''), '', listLink({})),
-      big('Déjà payé', c.paye.montant, `${pct} % du facturé`, 'ok', listLink({ payment: 'payee,partielle' })),
-      big('Reste à régler', c.reste.montant, `${c.reste.n} facture(s)` + (retard ? ` — dont en retard : ${money(retard, cur)}` : ''), retard ? 'bad' : 'warn', listLink({ open: '1' }))));
+      big('Facturé (TTC)', c.facture.ttc, `${c.facture.n} facture(s)` + (c.avoirs.n ? ` — avoirs : ${money(c.avoirs.ttc, cur)}` : '') + (c.sans_montant ? ` — ${c.sans_montant} sans montant lu` : ''), '', listLink({}), 'facture'),
+      big('Déjà payé', c.paye.montant, `${pct} % du facturé`, 'ok', listLink({ payment: 'payee,partielle' }), 'paye'),
+      big('Reste à régler', c.reste.montant, `${c.reste.n} facture(s)` + (retard ? ` — dont en retard : ${money(retard, cur)}` : ''), retard ? 'bad' : 'warn', listLink({ open: '1' }), 'reste')));
     box.appendChild(el('div', { class: 'synth-bar', title: `Payé ${pct} %` }, el('div', { style: `width:${pct}%` })));
     const fams = c.familles || {};
-    if (!p.famille && Object.keys(fams).length > 1) box.appendChild(el('div', { class: 'panel' }, el('table', {},
-      el('thead', {}, el('tr', {}, el('th', {}, 'Famille'), el('th', { class: 'num' }, 'Facturé'), el('th', { class: 'num' }, 'Payé'), el('th', { class: 'num' }, 'Reste à régler'))),
-      el('tbody', {}, [['textile', 'Textile'], ['autre', 'Autres']].filter(([k]) => fams[k]).map(([k, l]) => el('tr', { class: 'clickable', onclick: () => go({ ...p, famille: k }) },
-        el('td', {}, l), el('td', { class: 'num' }, money(fams[k].facture, cur)), el('td', { class: 'num' }, money(fams[k].paye, cur)), el('td', { class: 'num' }, money(fams[k].reste, cur))))))));
+    const fkeys = Object.keys(FAMILLES).filter(k => fams[k]);
+    if (fkeys.length > 1) box.appendChild(el('div', { class: 'panel' }, el('h2', {}, 'Par famille de fournisseurs'), el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, 'Famille'), el('th', { class: 'num' }, 'Factures'), el('th', { class: 'num' }, 'Facturé'), el('th', { class: 'num' }, 'Payé'), el('th', { class: 'num' }, 'Reste à régler'), el('th', { class: 'num' }, 'dont en retard'))),
+      el('tbody', {}, fkeys.map(k => el('tr', { class: 'clickable', onclick: () => go({ ...p, famille: k }) },
+        el('td', {}, el('span', { class: 'fam-dot fam-' + k }), FAMILLES[k]), el('td', { class: 'num' }, fams[k].n), el('td', { class: 'num' }, money(fams[k].facture, cur)),
+        el('td', { class: 'num' }, money(fams[k].paye, cur)), el('td', { class: 'num' }, money(fams[k].reste, cur)),
+        el('td', { class: 'num' + (fams[k].retard ? ' fc-bad' : '') }, fams[k].retard ? money(fams[k].retard, cur) : '—')))))));
     const lib = s => s.semaine === 'retard' ? 'En retard' : s.semaine === 'sans_echeance' ? 'Sans échéance' : s.semaine === 'litige' ? 'En litige'
       : (s.semaine === data.semaine_courante ? 'Cette semaine' : 'Sem. du ' + d(s.semaine).slice(0, 5));
     const weeks = c.semaines.filter(s => !['retard', 'sans_echeance', 'litige'].includes(s.semaine));
-    box.appendChild(el('div', { class: 'panel' }, el('h2', {}, 'Reste à régler par semaine d\'échéance'),
-      c.semaines.length ? [barChart(c.semaines.slice(0, 26).map(s => ({ label: s.semaine === 'retard' ? 'Retard' : s.semaine === 'sans_echeance' ? 'Sans éch.' : s.semaine === 'litige' ? 'Litige' : d(s.semaine).slice(0, 5),
+    box.appendChild(el('div', { class: 'panel' }, el('h2', {}, 'Reste à régler par semaine d\'échéance' + (retard ? ` — hors retard (${money(retard, cur)}, voir tableau)` : '')),
+      c.semaines.length ? [barChart(c.semaines.filter(s => s.semaine !== 'retard').slice(0, 26).map(s => ({ label: s.semaine === 'retard' ? 'Retard' : s.semaine === 'sans_echeance' ? 'Sans éch.' : s.semaine === 'litige' ? 'Litige' : d(s.semaine).slice(0, 5),
           values: [{ v: s.montant, cls: s.semaine === 'retard' ? 'bar-bad' : ['sans_echeance', 'litige'].includes(s.semaine) ? 'bar-grey' : 'bar', title: `${lib(s)} : ${money(s.montant, cur)} (${s.n} facture(s))` }] })), { h: 200 }),
         weeks.length > 26 ? el('div', { class: 'muted small' }, 'Graphique limité aux 26 premières semaines ; le tableau ci-dessous donne tout.') : null]
         : el('div', { class: 'muted' }, 'Rien à régler sur cette période.')));
@@ -363,13 +428,61 @@ async function viewSynthese(view) {
   }
 }
 
+// ------------------------------------------------------------------ échéances des 3 prochaines semaines (en tête du tableau de bord)
+async function echeancesHero(view, base) {
+  const data = await api('GET', '/api/synthese?' + qs({ ...base })).catch(() => null);
+  if (!data) return;
+  const curs = Object.keys(data.currencies);
+  const cur = curs.includes('EUR') ? 'EUR' : curs[0];
+  if (!cur) return;
+  const c = data.currencies[cur];
+  const addDays = (iso, n) => { const x = new Date(iso + 'T12:00:00'); x.setDate(x.getDate() + n); return isoDate(x); };
+  const monday = data.semaine_courante;
+  const clean = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v));
+  const link = extra => '#/factures?' + new URLSearchParams(clean({ ...base, doc_type: 'facture', open: '1', ...extra }));
+  const weeks = [0, 7, 14].map((off, i) => {
+    const ws = addDays(monday, off), we = addDays(ws, 6);
+    const w = c.semaines.find(x => x.semaine === ws) || { n: 0, montant: 0, valide: 0, fournisseurs: [] };
+    return { ...w, ws, we, title: ['Cette semaine', 'Semaine prochaine', 'Dans 2 semaines'][i] };
+  });
+  const retard = c.semaines.find(x => x.semaine === 'retard');
+  const total = weeks.reduce((s, w) => s + (w.montant || 0), 0), n = weeks.reduce((s, w) => s + (w.n || 0), 0);
+  const max = Math.max(1, ...weeks.map(w => w.montant || 0));
+  const split = {}; weeks.forEach(w => Object.entries(w.familles || {}).forEach(([k, v]) => { split[k] = (split[k] || 0) + v; }));
+  const famLine = (obj, cls) => { const ks = Object.keys(FAMILLES).filter(k => obj[k]); return ks.length ? el('div', { class: cls },
+    ks.map(k => el('a', { href: link({ due_from: monday, due_to: addDays(monday, 20), famille: k }), class: 'fam-chip fam-' + k, onclick: e => e.stopPropagation() }, el('span', { class: 'fam-dot fam-' + k }), FAMILLES[k] + ' ', el('b', {}, money(obj[k], cur))))) : null; };
+  view.appendChild(el('section', { class: 'hero' },
+    el('div', { class: 'hero-head' },
+      el('a', { class: 'hero-total', href: link({ due_from: monday, due_to: addDays(monday, 20) }) },
+        el('div', { class: 'hero-k' }, 'À régler dans les 3 prochaines semaines'),
+        el('div', { class: 'hero-v' }, money(total, cur)),
+        el('div', { class: 'hero-s' }, `${n} facture(s) · échéances du ${d(monday)} au ${d(addDays(monday, 20))}`),
+        base.famille ? null : famLine(split, 'hero-split')),
+      retard && retard.montant ? el('a', { class: 'hero-late', href: link({ situation: 'en_retard' }) },
+        el('span', { class: 'hl-l' }, 'Déjà en retard'), el('span', { class: 'hl-v' }, money(retard.montant, cur)),
+        el('span', { class: 'hl-s' }, `${retard.n} facture(s) à régulariser`)) : null),
+    el('div', { class: 'hero-weeks' }, weeks.map((w, i) => el('a', { class: 'hero-week' + (i === 0 ? ' now' : ''), href: link({ due_from: w.ws, due_to: w.we }) },
+      el('div', { class: 'hw-t' }, w.title, el('span', { class: 'hw-d' }, `${d(w.ws).slice(0, 5)} → ${d(w.we).slice(0, 5)}`)),
+      el('div', { class: 'hw-v' }, money(w.montant || 0, cur)),
+      el('div', { class: 'hw-bar' }, el('div', { style: `width:${(w.montant || 0) / max * 100}%` })),
+      el('div', { class: 'hw-n' }, w.n ? `${w.n} facture(s)` + (w.montant - w.valide > 0 ? ` · dont ${money(w.montant - w.valide, cur)} à vérifier` : '') : 'Rien à régler'),
+      base.famille ? null : (w.familles && Object.keys(w.familles).length > 1 ? el('div', { class: 'hw-fam' }, Object.keys(FAMILLES).filter(k => w.familles[k]).map(k => el('span', { class: 'fam-chip fam-' + k }, el('span', { class: 'fam-dot fam-' + k }), FAMILLES[k] + ' ', el('b', {}, money(w.familles[k], cur))))) : null),
+      el('ul', { class: 'hw-sup' }, (w.fournisseurs || []).slice(0, 4).map(f => el('li', {}, el('span', {}, f.supplier_name), el('span', { class: 'num' }, money(f.montant, cur))))),
+      (w.fournisseurs || []).length > 4 ? el('div', { class: 'hw-more' }, `+ ${w.fournisseurs.length - 4} autre(s) fournisseur(s)`) : null)))));
+}
+
 // ------------------------------------------------------------------ tableau de bord
 async function viewDashboard(view) {
-  const p = Object.assign({ company_id: '', supplier_id: '', from: '', to: '' }, getHashParams());
-  const filters = filterBar(p, ['company_id', 'supplier_id', 'from', 'to'], np => { location.hash = '#/?' + new URLSearchParams(np); });
-  view.append(el('h1', {}, 'Tableau de bord'), filters);
+  const p = Object.assign({ company_id: '', supplier_id: '', from: '', to: '', famille: '' }, getHashParams());
+  const go = np => { location.hash = '#/?' + new URLSearchParams(Object.fromEntries(Object.entries(np).filter(([, v]) => v))); };
+  const base = { company_id: p.company_id, supplier_id: p.supplier_id, from: p.from, to: p.to, famille: p.famille };
+  const left = el('div', { class: 'synth-main' });
+  const sub = [p.famille ? famLabels(p.famille).join(' + ') : '', p.from || p.to ? `factures ${p.from ? 'du ' + d(p.from) : ''} ${p.to ? 'au ' + d(p.to) : ''}`.trim() : ''].filter(Boolean).join(' · ');
+  view.append(el('h1', {}, 'Tableau de bord'), sub ? el('div', { class: 'muted page-sub' }, sub) : null,
+    el('div', { class: 'synth-layout' }, left, filtersAside(p, go, { fiscal: true, presets: true, company: true, supplier: true, note: 'Les échéances à venir ne dépendent pas des dates de facture ; le reste du tableau de bord, oui.' })));
+  view = left;
+  await echeancesHero(view, { company_id: p.company_id, supplier_id: p.supplier_id, famille: p.famille });
   const data = await api('GET', '/api/dashboard?' + qs(p));
-  const base = { company_id: p.company_id, supplier_id: p.supplier_id, from: p.from, to: p.to };
   const link = extra => '#/factures?' + new URLSearchParams(Object.fromEntries(Object.entries({ ...base, ...extra }).filter(([, v]) => v)));
   // Alertes
   const al = data.alertes || {};
@@ -420,11 +533,11 @@ async function viewDashboard(view) {
           values: [{ v: w.valide, cls: 'bar', title: `Semaine du ${d(w.debut)} — validé : ${money(w.valide, cur)}` }, { v: w.montant - w.valide, cls: 'bar2', title: `à vérifier : ${money(w.montant - w.valide, cur)}` }] })),
         { label: 'Sans éch.', values: [{ v: c.prevision_hors_semaines.sans_echeance, cls: 'bar-grey', title: 'Sans échéance : ' + money(c.prevision_hors_semaines.sans_echeance, cur) }] },
       ]),
-      el('div', { class: 'legend' }, el('span', {}, el('i', { style: 'background:#4a78c2' }), 'Validé'), el('span', {}, el('i', { style: 'background:#a9c1ea' }), 'À vérifier'),
-        el('span', {}, el('i', { style: 'background:#d9534f' }), 'En retard (à régulariser)'), el('span', {}, el('i', { style: 'background:#b8bfcc' }), 'Sans échéance (non réparti)')));
+      el('div', { class: 'legend' }, el('span', {}, el('i', { style: 'background:#ff6b1a' }), 'Validé'), el('span', {}, el('i', { style: 'background:#ffb27a' }), 'À vérifier'),
+        el('span', {}, el('i', { style: 'background:#ff5c5c' }), 'En retard (à régulariser)'), el('span', {}, el('i', { style: 'background:#5b6068' }), 'Sans échéance (non réparti)')));
     // Balance âgée
     const ag = c.balance_agee;
-    const agItems = [['non_echu', 'Non échu', '#4a78c2'], ['r1_30', '1–30 j', '#e5a740'], ['r31_60', '31–60 j', '#e07b39'], ['r61_90', '61–90 j', '#d9534f'], ['r90p', '> 90 j', '#8e1f1a'], ['sans_echeance', 'Sans échéance', '#b8bfcc'], ['litige', 'En litige', '#7a3fb8']];
+    const agItems = [['non_echu', 'Non échu', '#ff6b1a'], ['r1_30', '1–30 j', '#f5b84a'], ['r31_60', '31–60 j', '#ff8f4d'], ['r61_90', '61–90 j', '#ff5c5c'], ['r90p', '> 90 j', '#b3261e'], ['sans_echeance', 'Sans échéance', '#5b6068'], ['litige', 'En litige', '#b48cf2']];
     const agTotal = agItems.reduce((s, a) => s + ag[a[0]], 0) || 1;
     const agingPanel = el('div', { class: 'panel' }, el('h2', {}, 'Balance âgée (solde restant dû)'),
       el('div', { class: 'aging' }, agItems.filter(a => ag[a[0]] > 0).map(a => { const x = el('div', { style: `width:${ag[a[0]] / agTotal * 100}%;background:${a[2]}` }); x.title = `${a[1]} : ${money(ag[a[0]], cur)}`; return x; })),
@@ -455,6 +568,7 @@ function filterBar(p, keys, onApply) {
     if (k === 'search') { f.search = el('input', { type: 'search', placeholder: 'Référence, fournisseur, commande…', value: p.search || '' }); parts.push(el('label', { class: 'f grow' }, 'Recherche', f.search)); }
     if (k === 'company_id') parts.push(sel('company_id', 'Société facturée', S.lookups.companies.map(c => [c.id, c.name])));
     if (k === 'supplier_id') parts.push(sel('supplier_id', 'Fournisseur', S.lookups.suppliers.map(s => [s.id, s.name + (s.status === 'propose' ? ' (proposé)' : '')])));
+    if (k === 'famille') parts.push(sel('famille', 'Famille', Object.entries(FAMILLES)));
     if (k === 'doc_type') parts.push(sel('doc_type', 'Type', [['facture', 'Facture'], ['avoir', 'Avoir'], ['autre', 'Autre']]));
     if (k === 'validation') parts.push(sel('validation', 'Validation', [['a_verifier', 'À vérifier'], ['validee', 'Validée'], ['rejetee', 'Rejetée']]));
     if (k === 'payment') parts.push(sel('payment', 'Paiement', [['non_payee', 'Non payée'], ['partielle', 'Partielle'], ['payee', 'Payée']]));
@@ -480,7 +594,7 @@ async function viewInvoices(view, forced, title) {
   const route = location.hash.split('?')[0];
   const go = np => { location.hash = route + '?' + new URLSearchParams(np); };
   view.appendChild(el('h1', {}, title || 'Factures'));
-  if (!forced.validation) view.appendChild(filterBar(p, ['search', 'supplier_id', 'company_id', 'doc_type', 'validation', 'payment', 'situation', 'duplicate', 'from', 'to', 'due_to'], np => go(np)));
+  if (!forced.validation) view.appendChild(filterBar(p, ['search', 'supplier_id', 'famille', 'company_id', 'doc_type', 'validation', 'payment', 'situation', 'duplicate', 'from', 'to', 'due_to'], np => go(np)));
   const data = await api('GET', '/api/invoices?' + qs(p));
   const selected = new Set();
   const exportP = Object.fromEntries(Object.entries(p).filter(([k]) => !['page', 'per_page', 'sort', 'dir', 'review'].includes(k)));
@@ -838,14 +952,17 @@ async function viewSupplier(view, id) {
   if (s.status === 'propose') view.appendChild(el('div', { class: 'callout' }, 'Fiche créée automatiquement à partir d\'une facture : vérifiez les informations puis validez-la. ',
     canWrite() ? el('button', { class: 'primary small', onclick: () => act(() => api('POST', `/api/suppliers/${id}/approve`), 'Fiche validée').then(render) }, 'Valider la fiche') : null));
   const ro = !canWrite();
-  const fields = [['name', 'Raison sociale'], ['trade_name', 'Nom commercial'], ['siren', 'SIREN'], ['siret', 'SIRET'], ['vat', 'N° TVA'], ['address', 'Adresse'], ['email', 'E-mail'], ['phone', 'Téléphone'], ['payment_terms', 'Conditions de paiement habituelles'], ['notes', 'Notes']];
+  const fields = [['name', 'Raison sociale'], ['trade_name', 'Nom commercial'], ['famille', 'Famille'], ['siren', 'SIREN'], ['siret', 'SIRET'], ['vat', 'N° TVA'], ['address', 'Adresse'], ['email', 'E-mail'], ['phone', 'Téléphone'], ['payment_terms', 'Conditions de paiement habituelles'], ['notes', 'Notes']];
   const inputs = {};
-  const form = el('div', { class: 'fields' }, fields.map(([k, l]) => { inputs[k] = el(k === 'notes' || k === 'address' ? 'textarea' : 'input', { value: s[k] || '', disabled: ro ? true : null }); return [el('div', { class: 'lab' }, l), el('div', { class: 'val' }, inputs[k])]; }));
+  const form = el('div', { class: 'fields' }, fields.map(([k, l]) => {
+    if (k === 'famille') inputs[k] = el('select', { disabled: ro ? true : null }, Object.entries(FAMILLES).map(([v, lab]) => el('option', { value: v, selected: (s.famille || 'autre') === v ? 'selected' : null }, lab)));
+    else inputs[k] = el(k === 'notes' || k === 'address' ? 'textarea' : 'input', { value: s[k] || '', disabled: ro ? true : null });
+    return [el('div', { class: 'lab' }, l), el('div', { class: 'val' }, inputs[k], k === 'famille' ? el('span', { class: 'small muted' }, 'Textile = marchandises · Charges fixes = loyers, énergie, télécom, leasing, assurances, abonnements, prestations récurrentes') : null)]; }));
   const aliases = el('textarea', { disabled: ro ? true : null }); aliases.value = s.aliases.join('\n');
   form.append(el('div', { class: 'lab' }, 'Noms alternatifs / variantes (un par ligne)'), el('div', { class: 'val' }, aliases));
   const info = el('div', { class: 'panel' }, el('h2', {}, 'Fiche'), form,
     ro ? null : el('div', { style: 'margin-top:10px' }, el('button', { class: 'primary', onclick: async () => {
-      const body = {}; for (const [k] of fields) if ((s[k] || '') !== inputs[k].value) body[k] = inputs[k].value;
+      const body = {}; for (const [k] of fields) if ((k === 'famille' ? (s.famille || 'autre') : (s[k] || '')) !== inputs[k].value) body[k] = inputs[k].value;
       const al = aliases.value.split('\n').map(x => x.trim()).filter(Boolean); if (JSON.stringify(al) !== JSON.stringify(s.aliases)) body.aliases = al;
       await act(() => api('PATCH', '/api/suppliers/' + id, body), 'Fiche enregistrée'); render(); } }, 'Enregistrer')));
   // Banque
