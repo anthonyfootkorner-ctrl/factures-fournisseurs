@@ -124,7 +124,7 @@ function changeOwnPassword() {
 
 // ------------------------------------------------------------------ squelette & routage
 const NAV = [
-  ['#/', 'Tableau de bord'], ['#/factures', 'Factures'], ['#/a-verifier', 'À vérifier'],
+  ['#/', 'Tableau de bord'], ['#/synthese', 'Synthèse'], ['#/factures', 'Factures'], ['#/a-verifier', 'À vérifier'],
   ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/encaissements', 'Suivi encaissements web'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
 ];
 let reviewCount = null;
@@ -207,6 +207,7 @@ async function render() {
     else if (parts[0] === 'imports') await viewImports(view);
     else if (parts[0] === 'parametres') await viewSettings(view);
     else if (parts[0] === 'banque') await viewBank(view);
+    else if (parts[0] === 'synthese') await viewSynthese(view);
     else if (parts[0] === 'encaissements') await viewEncaissements(view);
     else view.appendChild(el('p', {}, 'Page introuvable'));
   } catch (e) { view.appendChild(el('div', { class: 'callout bad' }, e.message)); }
@@ -284,6 +285,82 @@ function barChart(items, opts = {}) {
     if (it.sub) g.appendChild(svg('text', { x: x + bw * 0.35, y: H - padB + 27, 'text-anchor': 'middle' }, it.sub));
   });
   return g;
+}
+
+// ------------------------------------------------------------------ synthèse : facturé, payé, reste à régler par semaine d'échéance
+function isoDate(x) { return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; }
+function periodePreset(k) {
+  const t = new Date(), y = t.getFullYear(), m = t.getMonth();
+  if (k === 'mois') return [new Date(y, m, 1), new Date(y, m + 1, 0)];
+  if (k === 'mois_prec') return [new Date(y, m - 1, 1), new Date(y, m, 0)];
+  if (k === 'trimestre') { const q = Math.floor(m / 3) * 3; return [new Date(y, q, 1), new Date(y, q + 3, 0)]; }
+  if (k === 'annee') return [new Date(y, 0, 1), new Date(y, 11, 31)];
+  if (k === '12mois') return [new Date(y, m - 11, 1), new Date(y, m + 1, 0)];
+  return null;
+}
+async function viewSynthese(view) {
+  const p = getHashParams();
+  if (!p.from && !p.to) { const [a, b] = periodePreset('annee'); p.from = isoDate(a); p.to = isoDate(b); }
+  const go = np => { location.hash = '#/synthese?' + new URLSearchParams(Object.fromEntries(Object.entries(np).filter(([, v]) => v))); };
+  const from = el('input', { type: 'date', value: p.from || '' }), to = el('input', { type: 'date', value: p.to || '' });
+  const preset = (k, label) => el('button', { class: 'small', onclick: () => { const [a, b] = periodePreset(k); go({ ...p, from: isoDate(a), to: isoDate(b) }); } }, label);
+  view.append(el('h1', {}, 'Synthèse des factures fournisseurs'),
+    el('div', { class: 'panel synth-periode' },
+      el('div', { class: 'row' }, preset('mois', 'Ce mois'), preset('mois_prec', 'Mois dernier'), preset('trimestre', 'Ce trimestre'),
+        preset('annee', 'Cette année'), preset('12mois', '12 derniers mois'), el('button', { class: 'small', onclick: () => go({ ...p, from: '', to: '' , tout: '1' }) }, 'Tout')),
+      el('div', { class: 'row' }, el('label', { class: 'f' }, 'Factures datées du', from), el('label', { class: 'f' }, 'au', to),
+        el('button', { class: 'primary small', onclick: () => go({ ...p, from: from.value, to: to.value }) }, 'Afficher')),
+      el('div', { class: 'row' }, el('span', { class: 'muted' }, 'Fournisseurs :'),
+        [['', 'Tous'], ['textile', 'Textile'], ['autre', 'Autres']].map(([v, l]) => el('button', { class: 'small' + ((p.famille || '') === v ? ' primary' : ''), onclick: () => go({ ...p, famille: v }) }, l))),
+      el('div', { class: 'muted small' }, 'Période = date des factures. Le reste à régler est réparti selon la semaine d\'échéance (du lundi au dimanche). Famille textile = catégorie « Textile » dans Pennylane.')));
+  const q = Object.assign(p.tout ? {} : { from: p.from, to: p.to }, p.famille ? { famille: p.famille } : {});
+  const data = await api('GET', '/api/synthese?' + qs(q));
+  const curs = Object.keys(data.currencies);
+  if (!curs.length) { view.appendChild(el('div', { class: 'panel empty' }, 'Aucune facture sur cette période.')); return; }
+  const listLink = extra => '#/factures?' + new URLSearchParams(Object.fromEntries(Object.entries({ ...q, famille: '', doc_type: 'facture', ...extra }).filter(([, v]) => v)));
+  const addDays = (iso, n) => { const x = new Date(iso + 'T12:00:00'); x.setDate(x.getDate() + n); return isoDate(x); };
+  for (const cur of curs) {
+    const c = data.currencies[cur];
+    const box = el('section', {});
+    if (curs.length > 1) box.appendChild(el('h2', {}, 'Devise : ' + cur));
+    const retard = (c.semaines.find(s => s.semaine === 'retard') || {}).montant || 0;
+    const pct = c.facture.ttc ? Math.round(c.paye.montant / c.facture.ttc * 100) : 0;
+    const big = (lab, v, sub, cls, href) => el('a', { class: 'kpi big ' + (cls || ''), href: href || null }, el('div', { class: 'l' }, lab), el('div', { class: 'v' }, money(v, cur)), sub ? el('div', { class: 's' }, sub) : null);
+    box.appendChild(el('div', { class: 'kpis synth-kpis' },
+      big('Facturé (TTC)', c.facture.ttc, `${c.facture.n} facture(s)` + (c.avoirs.n ? ` — avoirs : ${money(c.avoirs.ttc, cur)}` : '') + (c.sans_montant ? ` — ${c.sans_montant} sans montant lu` : ''), '', listLink({})),
+      big('Déjà payé', c.paye.montant, `${pct} % du facturé`, 'ok', listLink({ payment: 'payee,partielle' })),
+      big('Reste à régler', c.reste.montant, `${c.reste.n} facture(s)` + (retard ? ` — dont en retard : ${money(retard, cur)}` : ''), retard ? 'bad' : 'warn', listLink({ open: '1' }))));
+    box.appendChild(el('div', { class: 'synth-bar', title: `Payé ${pct} %` }, el('div', { style: `width:${pct}%` })));
+    const fams = c.familles || {};
+    if (!p.famille && Object.keys(fams).length > 1) box.appendChild(el('div', { class: 'panel' }, el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, 'Famille'), el('th', { class: 'num' }, 'Facturé'), el('th', { class: 'num' }, 'Payé'), el('th', { class: 'num' }, 'Reste à régler'))),
+      el('tbody', {}, [['textile', 'Textile'], ['autre', 'Autres']].filter(([k]) => fams[k]).map(([k, l]) => el('tr', { class: 'clickable', onclick: () => go({ ...p, famille: k }) },
+        el('td', {}, l), el('td', { class: 'num' }, money(fams[k].facture, cur)), el('td', { class: 'num' }, money(fams[k].paye, cur)), el('td', { class: 'num' }, money(fams[k].reste, cur))))))));
+    const lib = s => s.semaine === 'retard' ? 'En retard' : s.semaine === 'sans_echeance' ? 'Sans échéance' : s.semaine === 'litige' ? 'En litige'
+      : (s.semaine === data.semaine_courante ? 'Cette semaine' : 'Sem. du ' + d(s.semaine).slice(0, 5));
+    const weeks = c.semaines.filter(s => !['retard', 'sans_echeance', 'litige'].includes(s.semaine));
+    box.appendChild(el('div', { class: 'panel' }, el('h2', {}, 'Reste à régler par semaine d\'échéance'),
+      c.semaines.length ? [barChart(c.semaines.slice(0, 26).map(s => ({ label: s.semaine === 'retard' ? 'Retard' : s.semaine === 'sans_echeance' ? 'Sans éch.' : s.semaine === 'litige' ? 'Litige' : d(s.semaine).slice(0, 5),
+          values: [{ v: s.montant, cls: s.semaine === 'retard' ? 'bar-bad' : ['sans_echeance', 'litige'].includes(s.semaine) ? 'bar-grey' : 'bar', title: `${lib(s)} : ${money(s.montant, cur)} (${s.n} facture(s))` }] })), { h: 200 }),
+        weeks.length > 26 ? el('div', { class: 'muted small' }, 'Graphique limité aux 26 premières semaines ; le tableau ci-dessous donne tout.') : null]
+        : el('div', { class: 'muted' }, 'Rien à régler sur cette période.')));
+    const tbody = el('tbody');
+    c.semaines.forEach(s => {
+      const due = s.semaine.length === 10 ? { due_from: s.semaine, due_to: addDays(s.semaine, 6) } : s.semaine === 'retard' ? { situation: 'en_retard' } : s.semaine === 'sans_echeance' ? { situation: 'sans_echeance' } : { situation: 'litige' };
+      const detail = el('tr', { class: 'synth-detail', hidden: true }, el('td', { colspan: 4 }, el('table', { class: 'inner' }, el('tbody', {},
+        s.fournisseurs.map(f => el('tr', {}, el('td', {}, f.supplier_id ? el('a', { href: '#/fournisseurs/' + f.supplier_id }, f.supplier_name) : f.supplier_name),
+          el('td', { class: 'num' }, f.n + ' fact.'), el('td', { class: 'num' }, f.premiere_echeance ? 'dès le ' + d(f.premiere_echeance) : '—'), el('td', { class: 'num' }, money(f.montant, cur))))))));
+      const row = el('tr', { class: 'clickable' + (s.semaine === 'retard' ? ' row-bad' : '') },
+        el('td', {}, el('span', { class: 'caret' }, '▸ '), lib(s), s.semaine.length === 10 ? el('span', { class: 'muted small' }, ` (${d(s.semaine)} → ${d(addDays(s.semaine, 6))})`) : null),
+        el('td', { class: 'num' }, s.n), el('td', { class: 'num' }, el('a', { href: listLink({ open: '1', ...due }), onclick: e => e.stopPropagation() }, money(s.montant, cur))),
+        el('td', { class: 'num muted' }, s.valide ? money(s.valide, cur) : '—'));
+      row.onclick = () => { detail.hidden = !detail.hidden; row.querySelector('.caret').textContent = detail.hidden ? '▸ ' : '▾ '; };
+      tbody.append(row, detail);
+    });
+    box.appendChild(el('div', { class: 'panel' }, el('h2', {}, 'Détail par semaine (cliquez une ligne pour voir les fournisseurs)'),
+      el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Échéance'), el('th', { class: 'num' }, 'Factures'), el('th', { class: 'num' }, 'Reste à régler'), el('th', { class: 'num' }, 'dont validé'))), tbody)));
+    view.appendChild(box);
+  }
 }
 
 // ------------------------------------------------------------------ tableau de bord
@@ -1039,6 +1116,44 @@ const BANK_CATEGORIES = ['Frais bancaires', 'Virement interne', 'Salaires', 'Éc
   'Impayé client (prélèvement rejeté)', 'Remboursement / avance', 'Autre opération sans facture fournisseur'];
 const CONF = { sure: ['sûre', 'b-ok'], probable: ['probable', 'b-info'], possible: ['possible', ''] };
 
+// Rapprochements repris de Pennylane : propositions validées par l'utilisateur, en lot (par paquets de 50 opérations)
+async function pennylanePanel(view) {
+  const o = await api('GET', '/api/pennylane').catch(() => null);
+  if (!o || (!o.operations && !o.appliquees && !o.bloquees)) return;
+  const box = el('div', { class: 'panel pl-panel' }, el('h2', {}, 'Rapprochements repris de Pennylane'),
+    el('p', {}, o.operations
+      ? `${o.operations} opération(s) bancaire(s) déjà rapprochée(s) dans Pennylane avec ${o.factures} facture(s) de l'application, pour ${money(o.montant, 'EUR')}.`
+      : 'Toutes les propositions Pennylane ont été traitées.'),
+    el('p', { class: 'muted small' }, `Déjà appliquées : ${o.appliquees}. ` + (o.bloquees ? `${o.bloquees} opération(s) non proposée(s) (déjà rapprochée(s) ici, ou facture déjà soldée). ` : '') +
+      (o.derniere_synchro ? `Dernière synchronisation : ${dt(o.derniere_synchro)}.` : '')));
+  if (o.operations && o.exemples.length) box.appendChild(el('details', {}, el('summary', {}, 'Voir les plus récentes'),
+    el('table', {}, el('tbody', {}, o.exemples.map(x => el('tr', {}, el('td', {}, d(x.tx_date)), el('td', { class: 'small' }, x.tx_label),
+      el('td', { class: 'num' }, money(x.tx_amount, 'EUR')),
+      el('td', { class: 'small' }, x.invoices.map(i => el('div', {}, el('a', { href: '#/factures/' + i.invoice_id }, `${i.supplier_name || '?'} — ${i.reference || '#' + i.invoice_id}`), ' ', money(i.amount, 'EUR'))))))))));
+  if (o.operations && canWrite()) {
+    const status = el('div', { class: 'muted small' });
+    const btn = el('button', { class: 'primary', onclick: () => modal('Valider les rapprochements Pennylane',
+      el('div', {}, el('p', {}, `Pour chacune des ${o.operations} opérations, le règlement des factures rapprochées par Pennylane sera enregistré à la date de l'opération.`),
+        el('p', {}, o.dont_factures_a_verifier ? `${o.dont_factures_a_verifier} facture(s) sont encore « à vérifier » : elles seront validées en même temps. Celles qui ont une anomalie bloquante (montant manquant, doublon…) sont laissées de côté.` : ''),
+        el('p', { class: 'muted small' }, 'Chaque règlement reste annulable depuis la page Banque (« Annuler le rapprochement »).')),
+      [{ label: 'Valider et enregistrer les règlements', fn: async close => {
+        close(); btn.disabled = true;
+        let done = 0, skipped = 0, errs = [];
+        for (let k = 0; k < 200; k++) {
+          status.textContent = `Enregistrement en cours… ${done} opération(s) rapprochée(s)` + (skipped ? `, ${skipped} laissée(s) de côté` : '');
+          const r = await act(() => api('POST', '/api/pennylane/apply', { validate: true, limit: 50 }));
+          done += r.done; skipped += r.skipped; errs = errs.concat(r.errors || []);
+          if (r.done + r.skipped === 0 || r.done === 0) break;
+        }
+        toast(`${done} opération(s) rapprochée(s)` + (skipped ? ` — ${skipped} laissée(s) de côté` : ''));
+        if (errs.length) console.warn('Rapprochements Pennylane non appliqués', errs);
+        render();
+      } }]) }, `Valider les ${o.operations} rapprochements`);
+    box.append(el('div', { class: 'row' }, btn), status);
+  }
+  view.appendChild(box);
+}
+
 async function viewBank(view) {
   const p = Object.assign({ status: 'a_rapprocher,partielle', sens: 'debit', page: 1 }, getHashParams());
   const go = np => { location.hash = '#/banque?' + new URLSearchParams(np); };
@@ -1057,6 +1172,7 @@ async function viewBank(view) {
         el('td', { class: 'num' }, a.n_open ? el('span', { class: 'badge b-warn' }, a.n_open) : '0'),
         el('td', { class: 'small' }, a.first_date ? `${d(a.first_date)} → ${d(a.last_date)}` : 'soldes seuls')))))
       : el('div', { class: 'empty' }, 'Aucun relevé importé.')));
+  if (!S.demo) await pennylanePanel(view);
   if (canWrite() && !S.demo) view.appendChild(uploadPanel({ title: 'Déposez vos relevés bancaires', label: 'Relevés bancaires',
     hint: 'Exports CIC (Excel), Crédit Agricole (Excel), Société Générale (CSV)… Un relevé qui recouvre une période déjà importée n\'ajoute que les opérations nouvelles.',
     accept: '.xlsx,.xls,.csv', note: 'Les relevés sont lus par le poste de traitement comme les factures ; ils restent privés.' }));

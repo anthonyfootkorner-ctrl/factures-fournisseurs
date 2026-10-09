@@ -167,3 +167,22 @@ tr.click { cursor: pointer; } tr.click:hover td { background: #f7f9fc; }
 .badge.vj-pct { font-variant-numeric: tabular-nums; }
 .vj-detail-head { gap: 8px; margin-bottom: 10px; align-items: center; }
 .vj-detail-kv { margin-bottom: 10px; }
+
+/* Synthèse */
+.synth-periode .row { margin-bottom: 8px; gap: 6px; flex-wrap: wrap; }
+.synth-kpis { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.kpi.big { display: block; color: inherit; text-decoration: none; }
+.kpi.big .v { font-size: 28px; }
+.kpi.big.ok .v { color: var(--ok, #2e7d4f); }
+.kpi.big.bad .v { color: var(--bad, #c0392b); }
+.synth-bar { height: 10px; background: #f0d9a8; border-radius: 5px; overflow: hidden; margin: -4px 0 16px; }
+.synth-bar > div { height: 100%; background: #2e9e63; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: #f6f8fb; }
+tr.row-bad td { color: #b03a2e; font-weight: 600; }
+tr.synth-detail > td { background: #fafbfc; padding: 4px 8px 10px 28px; }
+table.inner { width: 100%; }
+table.inner td { border: 0; padding: 3px 6px; font-size: 13px; }
+
+.pl-panel { border-left: 4px solid #2e9e63; }
+.pl-panel details { margin: 8px 0; }
