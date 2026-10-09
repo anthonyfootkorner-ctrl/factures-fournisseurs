@@ -1221,7 +1221,7 @@ async function viewEncaissements(view) {
   else if (p.tab === 'previsionnel') await pspForecastTab(body, p, go);
   else if (p.tab === 'parametres') await pspSettingsTab(body, ov);
   else if (p.tab === 'deposer') body.appendChild(uploadPanel({ title: 'Déposez les exports des prestataires', label: 'Exports encaissements web', accept: '.csv,.xlsx',
-    hint: 'Shopify : transactions des commandes, versements et transactions Shopify Payments, export Commandes (n° TikTok) — JUST (CSV) — TikTok Shop (income .xlsx). Reconnus automatiquement ; un export qui recouvre une période déjà chargée n\'ajoute que les nouveautés.',
+    hint: 'Shopify : transactions des commandes, versements et transactions Shopify Payments, export Commandes (n° TikTok) — JUST (CSV) — TikTok Shop (income .xlsx) — Global-e (avis de paiement PDF « Remittance Advice » et rapports hebdomadaires « ReconciliationReport … Euro.xlsx »). Reconnus automatiquement ; un export qui recouvre une période déjà chargée n\'ajoute que les nouveautés.',
     note: 'Seules les colonnes utiles au rapprochement sont lues (jamais les noms ni e-mails des clients). Les fichiers sont traités par le poste de traitement comme les relevés bancaires.' }));
   else await pspTodoTab(body, p, go, ov);
 }
