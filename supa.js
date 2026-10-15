@@ -156,6 +156,7 @@ async function apiRoute(method, url, body) {
   if (method === 'GET' && R(/^\/api\/lookups$/)) return SB.rpc('lookups', { p_demo: demo });
   if (method === 'GET' && R(/^\/api\/dashboard$/)) return SB.rpc('dashboard', { p: q });
   if (method === 'GET' && R(/^\/api\/synthese$/)) return SB.rpc('synthese', { p: q });
+  if (method === 'POST' && R(/^\/api\/invoices\/files$/)) return SB.rpc('invoices_files', { p: body });
   if (method === 'GET' && R(/^\/api\/pennylane$/)) return SB.rpc('pennylane_overview', {});
   if (method === 'POST' && R(/^\/api\/pennylane\/apply$/)) return SB.rpc('pennylane_apply', { p_validate: !!body.validate, p_limit: body.limit || 50 });
   if (method === 'GET' && R(/^\/api\/invoices$/)) return SB.rpc('invoices_list', { p: q });
@@ -333,4 +334,52 @@ async function openStored(bucket, path, filename) {
   const a = document.createElement('a');
   a.href = url; a.rel = 'noopener';
   document.body.appendChild(a); a.click(); a.remove();
+}
+
+// ------------------------------------------------------------------ ZIP (sans compression) constitué dans le navigateur
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipBlob(entries) {
+  // entries : [{ name, data: Uint8Array }] → Blob ZIP « stored » (les PDF sont déjà compressés)
+  const enc = new TextEncoder(), locals = [], centrals = []; let offset = 0;
+  const u16 = v => [v & 255, (v >> 8) & 255], u32 = v => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
+  const now = new Date(), dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF, dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+  for (const e of entries) {
+    const name = enc.encode(e.name), crc = crc32(e.data), n = e.data.length;
+    const head = new Uint8Array([0x50, 0x4B, 3, 4, ...u16(20), ...u16(0x0800), ...u16(0), ...u16(dosTime), ...u16(dosDate), ...u32(crc), ...u32(n), ...u32(n), ...u16(name.length), ...u16(0), ...name]);
+    locals.push(head, e.data);
+    centrals.push(new Uint8Array([0x50, 0x4B, 1, 2, ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(dosTime), ...u16(dosDate), ...u32(crc), ...u32(n), ...u32(n), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset), ...name]));
+    offset += head.length + n;
+  }
+  const cdSize = centrals.reduce((s, c) => s + c.length, 0);
+  const end = new Uint8Array([0x50, 0x4B, 5, 6, ...u16(0), ...u16(0), ...u16(entries.length), ...u16(entries.length), ...u32(cdSize), ...u32(offset), ...u16(0)]);
+  return new Blob([...locals, ...centrals, end], { type: 'application/zip' });
+}
+function safeName(s) { return String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[\\/:*?"<>|\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80); }
+// Télécharge les PDF d'un ensemble de factures (filtre ou identifiants) dans un ZIP : une facture = ses pages (extrait) ou l'original.
+async function downloadInvoicePdfs(filter, onProgress) {
+  const rows = await apiRoute('POST', '/api/invoices/files', filter);
+  if (!rows.length) throw new Error('Aucun fichier pour cette sélection');
+  const entries = [], seen = new Map(), errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (onProgress) onProgress(i + 1, rows.length);
+    const partial = r.mime === 'application/pdf' && r.pages && (r.page_from > 1 || r.page_to < r.pages);
+    const paths = partial ? [`extraits/${r.sha256}_${r.page_from}-${r.page_to}.pdf`, `originaux/${r.sha256}`] : [`originaux/${r.sha256}`];
+    let data = null;
+    for (const path of paths) {
+      try { const url = await SB.signedUrl('pieces', path); const resp = await fetch(url); if (resp.ok) { data = new Uint8Array(await resp.arrayBuffer()); break; } } catch (e) { /* essai suivant */ }
+    }
+    if (!data) { errors.push(`#${r.invoice_id} ${r.reference || ''}`); continue; }
+    const ext = (r.filename || '').match(/\.[a-z0-9]{2,5}$/i) ? r.filename.match(/\.[a-z0-9]{2,5}$/i)[0].toLowerCase() : (r.mime === 'application/pdf' ? '.pdf' : '');
+    let name = `${safeName(r.supplier_name) || 'Fournisseur'} - ${safeName(r.reference) || '#' + r.invoice_id}${r.invoice_date ? ' - ' + r.invoice_date : ''}${ext}`;
+    const k = seen.get(name) || 0; seen.set(name, k + 1); if (k) name = name.replace(/(\.[a-z0-9]+)?$/i, ` (${k + 1})$1`);
+    entries.push({ name, data });
+  }
+  if (!entries.length) throw new Error('Aucun fichier téléchargeable');
+  const blob = zipBlob(entries), url = URL.createObjectURL(blob), a = document.createElement('a');
+  const sup = rows.every(r => r.supplier_name === rows[0].supplier_name) ? safeName(rows[0].supplier_name) : 'factures';
+  a.href = url; a.download = `${sup || 'factures'} - ${entries.length} PDF - ${new Date().toISOString().slice(0, 10)}.zip`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return { n: entries.length, errors };
 }

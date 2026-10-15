@@ -82,6 +82,7 @@ const L = {
   role: { admin: 'Administrateur', finance: 'Finance', lecture: 'Lecture seule' },
   src: { document: ['lu', 'Valeur lue dans le document'], calcul: ['calculé', 'Valeur calculée'], saisie: ['saisi', 'Valeur saisie / corrigée par un utilisateur'], referentiel: ['réf.', 'Valeur issue du référentiel'] },
 };
+function asList(v) { return Array.isArray(v) ? v : (typeof v === 'string' && v ? (() => { try { return JSON.parse(v); } catch (e) { return [v]; } })() : []); }
 function badge(map, key) { const v = (L[map] || {})[key] || [key, '']; return el('span', { class: 'badge ' + v[1] }, v[0]); }
 
 function modal(title, body, actions) {
@@ -605,9 +606,18 @@ async function viewInvoices(view, forced, title) {
     if (r.errors.length) modal('Factures non validées', el('ul', { class: 'list-plain' }, r.errors.map(e => el('li', {}, e))));
     render();
   } }, 'Valider la sélection');
+  const pdfProgress = el('span', { class: 'muted small' });
+  const pdfRun = async filter => {
+    const r = await act(() => downloadInvoicePdfs(filter, (i, n) => { pdfProgress.textContent = `PDF ${i} / ${n}…`; }));
+    pdfProgress.textContent = '';
+    toast(`${r.n} fichier(s) dans le ZIP` + (r.errors.length ? ` — ${r.errors.length} introuvable(s)` : ''), false);
+    if (r.errors.length) modal('Fichiers introuvables', el('ul', { class: 'list-plain' }, r.errors.map(e => el('li', {}, e))));
+  };
+  const pdfSelBtn = el('button', { disabled: true, onclick: () => pdfRun({ ids: [...selected] }) }, 'PDF de la sélection');
+  const pdfAllBtn = data.total && data.total <= 2000 ? el('button', { onclick: () => confirmBox('Télécharger les PDF', `Assembler les ${data.total} facture(s) de ce filtre dans un ZIP ?`, 'Télécharger', () => pdfRun(exportP), 'primary') }, `PDF du filtre (${data.total})`) : null;
   const toolbar = el('div', { class: 'row', style: 'margin-bottom:8px' },
     el('div', { class: 'grow muted' }, `${data.total} document(s)`),
-    canWrite() ? bulkBtn : null,
+    canWrite() ? bulkBtn : null, pdfProgress, pdfSelBtn, pdfAllBtn,
     el('button', { onclick: () => act(() => exportInvoices(exportP, 'csv')).then(n => toast(`${n} ligne(s) exportée(s)`)) }, 'Export CSV'),
     el('button', { onclick: () => act(() => exportInvoices(exportP, 'xlsx')).then(n => toast(`${n} ligne(s) exportée(s)`)) }, 'Export Excel'));
   const cols = [
@@ -617,16 +627,16 @@ async function viewInvoices(view, forced, title) {
   ];
   const allBox = el('input', { type: 'checkbox', onchange: e => { view.querySelectorAll('input.rowsel').forEach(c => { c.checked = e.target.checked; c.dispatchEvent(new Event('change')); }); } });
   const head = el('tr', {}, cols.map(([label, key, num], i) => {
-    if (i === 0) return el('th', {}, canWrite() ? allBox : null);
+    if (i === 0) return el('th', {}, allBox);
     if (!key) return el('th', {}, label);
     const arrow = p.sort === key ? (p.dir === 'asc' ? ' ▲' : ' ▼') : '';
     return el('th', { class: 'sort' + (num ? ' num' : ''), onclick: () => go({ ...p, sort: key, dir: p.sort === key && p.dir === 'desc' ? 'asc' : 'desc', page: 1 }) }, label + arrow);
   }));
   const rows = data.rows.map(r => {
-    const cb = el('input', { type: 'checkbox', class: 'rowsel', onclick: e => e.stopPropagation(), onchange: e => { e.target.checked ? selected.add(r.id) : selected.delete(r.id); bulkBtn.disabled = !selected.size; } });
+    const cb = el('input', { type: 'checkbox', class: 'rowsel', onclick: e => e.stopPropagation(), onchange: e => { e.target.checked ? selected.add(r.id) : selected.delete(r.id); bulkBtn.disabled = !selected.size; pdfSelBtn.disabled = !selected.size; pdfSelBtn.textContent = selected.size ? `PDF de la sélection (${selected.size})` : 'PDF de la sélection'; } });
     const nb = r.anomalies.filter(a => a.niveau === 'bloquant').length, na = r.anomalies.filter(a => a.niveau === 'alerte' && !r.acknowledged.includes(a.code)).length;
     return el('tr', { class: 'click', onclick: () => { S.reviewQueue = data.rows.map(x => x.id); location.hash = '#/factures/' + r.id; } },
-      el('td', {}, canWrite() ? cb : null),
+      el('td', {}, cb),
       el('td', { class: 'nowrap' }, '#' + r.id, r.is_demo ? el('span', { class: 'badge b-demo', style: 'margin-left:4px' }, 'DÉMO') : null),
       el('td', {}, r.supplier_name || todo(), r.supplier_status === 'propose' ? el('div', { class: 'small muted' }, 'proposé') : null),
       el('td', { class: 'mono' }, r.reference || todo(), r.doc_type !== 'facture' ? el('div', {}, badge('doc_type', r.doc_type)) : null),
@@ -932,7 +942,7 @@ async function viewSuppliers(view) {
   view.appendChild(el('div', { class: 'panel table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, ['Nom', 'Variantes', 'SIREN', 'TVA', 'IBAN validé', 'Conditions', 'Factures', 'Encours', 'Statut'].map((h, i) => el('th', { class: i === 7 || i === 6 ? 'num' : '' }, h)))),
     el('tbody', {}, rows.length ? rows.map(s => el('tr', { class: 'click', onclick: () => { location.hash = '#/fournisseurs/' + s.id; } },
       el('td', {}, el('strong', {}, s.name), s.trade_name ? el('div', { class: 'small muted' }, s.trade_name) : null),
-      el('td', { class: 'small' }, JSON.parse(s.aliases || '[]').join(', ')), el('td', { class: 'mono' }, s.siren || '—'), el('td', { class: 'mono' }, s.vat || '—'),
+      el('td', { class: 'small' }, asList(s.aliases).join(', ')), el('td', { class: 'mono' }, s.siren || '—'), el('td', { class: 'mono' }, s.vat || '—'),
       el('td', {}, s.iban ? el('span', { class: 'badge b-ok' }, 'Oui') : el('span', { class: 'badge' }, 'Non')), el('td', { class: 'small' }, s.payment_terms || '—'),
       el('td', { class: 'num' }, s.n_invoices), el('td', { class: 'num' }, money(s.encours) + ((s.currencies || '').includes(',') ? ' *' : ' ' + (s.currencies || ''))), el('td', {}, badge('supplier', s.status))))
       : el('tr', {}, el('td', { colspan: 9, class: 'empty' }, 'Aucun fournisseur'))))),
@@ -952,6 +962,13 @@ async function viewSupplier(view, id) {
   if (s.status === 'propose') view.appendChild(el('div', { class: 'callout' }, 'Fiche créée automatiquement à partir d\'une facture : vérifiez les informations puis validez-la. ',
     canWrite() ? el('button', { class: 'primary small', onclick: () => act(() => api('POST', `/api/suppliers/${id}/approve`), 'Fiche validée').then(render) }, 'Valider la fiche') : null));
   const ro = !canWrite();
+  const supProgress = el('span', { class: 'muted small' });
+  view.appendChild(el('div', { class: 'row', style: 'margin-bottom:14px;align-items:center' },
+    el('a', { class: 'btn small', href: '#/factures?supplier_id=' + id }, 'Voir ses factures'),
+    el('button', { class: 'small', onclick: () => confirmBox('Télécharger les PDF', `Assembler toutes les factures de ${s.name} dans un ZIP ?`, 'Télécharger', async () => {
+      const r = await act(() => downloadInvoicePdfs({ supplier_id: String(id) }, (i, n) => { supProgress.textContent = `PDF ${i} / ${n}…`; }));
+      supProgress.textContent = ''; toast(`${r.n} fichier(s) dans le ZIP` + (r.errors.length ? ` — ${r.errors.length} introuvable(s)` : ''));
+    }, 'primary') }, 'Télécharger tous ses PDF'), supProgress));
   const fields = [['name', 'Raison sociale'], ['trade_name', 'Nom commercial'], ['famille', 'Famille'], ['siren', 'SIREN'], ['siret', 'SIRET'], ['vat', 'N° TVA'], ['address', 'Adresse'], ['email', 'E-mail'], ['phone', 'Téléphone'], ['payment_terms', 'Conditions de paiement habituelles'], ['notes', 'Notes']];
   const inputs = {};
   const form = el('div', { class: 'fields' }, fields.map(([k, l]) => {
@@ -1141,7 +1158,7 @@ async function viewSettings(view) {
   view.appendChild(p);
   if (tab === 'societes') {
     p.append(el('h2', {}, 'Sociétés facturées (vos entités)'), el('p', { class: 'small muted' }, 'Elles servent à reconnaître la société destinataire sur les factures et à exclure ses identifiants de ceux du fournisseur.'),
-      el('table', {}, el('thead', {}, el('tr', {}, ['Nom', 'Variantes', 'SIREN', 'SIRET', 'TVA', ''].map(h => el('th', {}, h)))), el('tbody', {}, data.companies.map(c => el('tr', {}, el('td', {}, c.name), el('td', { class: 'small' }, JSON.parse(c.aliases).join(', ')),
+      el('table', {}, el('thead', {}, el('tr', {}, ['Nom', 'Variantes', 'SIREN', 'SIRET', 'TVA', ''].map(h => el('th', {}, h)))), el('tbody', {}, data.companies.map(c => el('tr', {}, el('td', {}, c.name), el('td', { class: 'small' }, asList(c.aliases).join(', ')),
         el('td', { class: 'mono' }, c.siren || ''), el('td', { class: 'mono' }, c.siret || ''), el('td', { class: 'mono' }, c.vat || ''),
         el('td', {}, ro ? null : el('button', { class: 'small danger', onclick: () => confirmBox('Supprimer la société', `Supprimer « ${c.name} » ?`, 'Supprimer', () => act(() => api('DELETE', '/api/companies/' + c.id)).then(render)) }, 'Supprimer')))))));
     if (!ro) { const f = { name: el('input'), aliases: el('input', { placeholder: 'séparées par des virgules' }), siret: el('input'), vat: el('input') };
