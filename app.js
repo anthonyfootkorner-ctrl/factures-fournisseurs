@@ -1462,13 +1462,14 @@ async function viewEncaissements(view) {
   // Onglets
   const nTodo = ov.providers.reduce((s, x) => s + x.n_anomalies, 0);
   const nPay = ov.providers.reduce((s, x) => s + x.n_versements, 0);
-  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['ventes-jour', 'Ventes par jour'], ['previsionnel', 'Prévisionnel'], ['parametres', 'Paramètres']];
+  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['ventes-jour', 'Ventes par jour'], ['previsionnel', 'Prévisionnel'], ['tva', 'TVA & CA'], ['parametres', 'Paramètres']];
   if (canWrite() && !S.demo) tabs.push(['deposer', 'Déposer des exports']);
   const body = el('div');
   view.appendChild(el('div', { class: 'panel' }, el('div', { class: 'tabs' }, tabs.map(([k, l]) => el('button', { class: p.tab === k ? 'on' : '', onclick: () => go({ ...p, tab: k, page: 1, etat: '', kind: '' }) }, l))), body));
   if (p.tab === 'versements') await pspPayoutsTab(body, p, go, ov);
   else if (p.tab === 'ventes-jour') await pspSalesByDayTab(body, p, go);
   else if (p.tab === 'previsionnel') await pspForecastTab(body, p, go);
+  else if (p.tab === 'tva') await pspVatTab(body, p, go);
   else if (p.tab === 'parametres') await pspSettingsTab(body, ov);
   else if (p.tab === 'deposer') body.appendChild(uploadPanel({ title: 'Déposez les exports des prestataires', label: 'Exports encaissements web', accept: '.csv,.xlsx',
     hint: 'Shopify : transactions des commandes, versements et transactions Shopify Payments, export Commandes (n° TikTok) — JUST (CSV) — TikTok Shop (income .xlsx) — PayPlug (rapport comptable CSV), Alma (export comptable CSV), PayPal (historique « Impact sur le solde » CSV) — Global-e (avis de paiement PDF « Remittance Advice » et rapports hebdomadaires « ReconciliationReport … Euro.xlsx »). Reconnus automatiquement ; un export qui recouvre une période déjà chargée n\'ajoute que les nouveautés.',
@@ -1656,6 +1657,88 @@ function fcSyncLine(sync) {
     s.covered_from ? ` · période couverte du ${d(s.covered_from)} au ${d(s.covered_to)}` : '',
     s.last_count !== null && s.last_count !== undefined ? ` · ${s.last_count} ligne(s) au dernier passage` : '',
     s.last_error ? el('div', { class: 'muted' }, 'Dernière erreur : ' + s.last_error) : null);
+}
+
+// ------------------------------------------------------------------ TVA & CA (rapport « Ventes » Shopify par commande, migration 38)
+const VAT_KIND = {
+  tva_shopify: ['TVA calculée par Shopify', 'b-ok'], tva_extraite: ['TVA extraite du TTC (TikTok via Channable, importé sans TVA)', 'b-warn'],
+  stockly: ['Exclu : remplacé par la facture Stockly', ''], baback: ['Exclu : Baback (à confirmer avec le comptable)', ''],
+  hors_france: ['Hors France', ''], non_payee: ['Non payée (paiement expiré) : exclue', 'b-bad'], non_payee_fr: ['Non payée (paiement expiré) : exclue', 'b-bad'],
+};
+
+async function pspVatTab(body, p, go) {
+  const v = await api('GET', '/api/psp/vat?' + qs({ month: p.vat_month || '' }));
+  if (!v.months.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucune donnée : la synchro Shopify du détail TVA n\'a pas encore tourné.')); return; }
+  const cur = v.months.find(m => m.month === v.month) || v.months[0];
+  const ttc = (ht, tva) => (ht || 0) + (tva || 0);
+  const download = m => m.export
+    ? el('button', { class: 'small', title: `Généré le ${dt(m.export.generated_at)} — ${m.export.lines} lignes`, onclick: e => { e.stopPropagation(); act(() => openStored('exports', m.export.path, m.export.filename)); } }, 'Excel')
+    : el('span', { class: 'small muted nowrap' }, 'en préparation');
+  body.append(
+    el('p', { class: 'small muted' }, 'CA web et part France taxable, mois par mois, d\'après le rapport « Ventes » de Shopify détaillé commande par commande (ventes le jour de la commande, retours le jour du remboursement, frais de port inclus). ',
+      'Corrections appliquées : les commandes jamais payées (paiement expiré) sont retirées, Shopify les comptant quand même ; la TVA des ventes TikTok, importées sans TVA, est extraite du TTC ; ',
+      'Stockly est remplacé par la facture de TSG Lab (partie à 20 %). L\'Excel complet de chaque mois contient le détail de toutes les commandes et se met à jour automatiquement.'),
+    el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, 'Mois'), el('th', { class: 'num' }, 'CA Shopify affiché'), el('th', { class: 'num' }, 'Non payées retirées'),
+        el('th', { class: 'num' }, 'CA web réel TTC'), el('th', { class: 'num' }, 'dont France'), el('th', { class: 'num' }, 'France taxable HT'),
+        el('th', { class: 'num' }, 'TVA 20 %'), el('th', {}, 'Stockly'), el('th', {}, 'Fichier'))),
+      el('tbody', {}, v.months.map(m => el('tr', { class: m.month === cur.month ? 'vat-on' : null, style: 'cursor:pointer', onclick: () => go({ ...p, vat_month: m.month }) },
+        el('td', { class: 'nowrap' }, el('strong', {}, monthLabel(m.month))),
+        el('td', { class: 'num' }, money(m.shopify)), el('td', { class: 'num muted' }, m.non_payees ? '−' + money(m.non_payees) : '—'),
+        el('td', { class: 'num' }, el('strong', {}, money(m.ca_reel))), el('td', { class: 'num' }, money(m.france)),
+        el('td', { class: 'num' }, el('strong', {}, money(m.france_ht))), el('td', { class: 'num' }, el('strong', {}, money(m.france_tva))),
+        el('td', { class: 'small' }, m.stockly ? `facture ${m.stockly.invoice_no}` : el('span', { class: 'muted' }, '—')),
+        el('td', {}, download(m))))))));
+
+  // Détail du mois choisi
+  const det = v.detail;
+  const sum = (kinds, f) => det.filter(x => kinds.includes(x.kind)).reduce((s, x) => s + (x[f] || 0), 0);
+  const fr = det.filter(x => x.kind === 'tva_shopify' || x.kind === 'tva_extraite').sort((a, b) => (a.kind === b.kind ? b.ttc - a.ttc : a.kind === 'tva_shopify' ? -1 : 1));
+  const sk = cur.stockly;
+  const rows = fr.map(x => el('tr', {}, el('td', {}, x.channel), el('td', { class: 'small' }, el('span', { class: 'badge ' + VAT_KIND[x.kind][1] }, VAT_KIND[x.kind][0])),
+    el('td', { class: 'num' }, x.n), el('td', { class: 'num' }, money(x.ht)), el('td', { class: 'num' }, money(x.tva)), el('td', { class: 'num' }, money(ttc(x.ht, x.tva)))));
+  rows.push(el('tr', {}, el('td', {}, 'Stockly (TSG Lab)'), el('td', { class: 'small' }, sk ? `Facture ${sk.invoice_no}${sk.invoice_date ? ' du ' + d(sk.invoice_date) : ''}, partie à 20 %` : el('span', { class: 'muted' }, 'Aucune facture saisie pour ce mois')),
+    el('td', { class: 'num' }, ''), el('td', { class: 'num' }, sk ? money(sk.ht20) : '—'), el('td', { class: 'num' }, sk ? money(sk.tva20) : '—'), el('td', { class: 'num' }, sk ? money(ttc(sk.ht20, sk.tva20)) : '—')));
+  rows.push(el('tr', { class: 'vat-total' }, el('td', { colspan: 3 }, el('strong', {}, 'Total France taxable (20 %)')),
+    el('td', { class: 'num' }, el('strong', {}, money(cur.france_ht))), el('td', { class: 'num' }, el('strong', {}, money(cur.france_tva))),
+    el('td', { class: 'num' }, el('strong', {}, money(ttc(cur.france_ht, cur.france_tva))))));
+  const info = [
+    ['Stockly : partie à 0 % de la facture (vente exonérée, à déclarer à part)', sk ? sk.ht0 : null, 'HT'],
+    ['Commandes Stockly dans Shopify (prix public, remplacées par la facture)', sum(['stockly'], 'ttc'), 'TTC'],
+    ['Baback (France, sans TVA dans Shopify) : à confirmer avec le comptable', sum(['baback'], 'ttc'), 'TTC'],
+    ['Ventes hors France payées (UE, DOM, export, Global-e…)', sum(['hors_france'], 'ttc'), 'TTC'],
+    ['Commandes non payées (paiement expiré), comptées à tort par Shopify', sum(['non_payee', 'non_payee_fr'], 'ttc'), 'TTC'],
+  ].filter(x => x[1]);
+  const actions = el('div', { class: 'row', style: 'margin:10px 0;align-items:center' },
+    cur.export ? el('button', { class: 'primary', onclick: () => act(() => openStored('exports', cur.export.path, cur.export.filename)) }, `Télécharger l'Excel complet de ${monthLabel(cur.month).toLowerCase()}`) : el('span', { class: 'muted' }, 'Excel en préparation par le poste de traitement…'),
+    canWrite() && !S.demo ? el('button', { onclick: () => act(() => api('POST', '/api/psp/vat/refresh', { month: cur.month })).then(() =>
+      toast('Actualisation lancée : les chiffres seront à jour dans 2 à 3 minutes, l\'Excel dans les 10 minutes suivantes.')) }, 'Actualiser depuis Shopify') : null,
+    el('span', { class: 'small muted' }, (cur.data_at ? `Données Shopify du ${dt(cur.data_at)}` : '') + (cur.export ? ` · Excel généré le ${dt(cur.export.generated_at)}` : '')));
+  body.append(el('h2', { style: 'margin-top:22px' }, `${monthLabel(cur.month)} — part France taxable`), actions,
+    el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Canal de vente (livraison France)'), el('th', {}, 'Traitement'),
+      el('th', { class: 'num' }, 'Lignes'), el('th', { class: 'num' }, 'Base HT'), el('th', { class: 'num' }, 'TVA'), el('th', { class: 'num' }, 'TTC'))), el('tbody', {}, rows))),
+    info.length ? el('div', { class: 'panel', style: 'margin-top:12px' }, el('h3', {}, 'Hors base taxable France (pour information)'),
+      el('table', {}, el('tbody', {}, info.map(([l, c, u]) => el('tr', {}, el('td', {}, l), el('td', { class: 'num nowrap' }, money(c) + ' ' + u)))))) : null);
+
+  // Facture Stockly du mois (saisie depuis le récapitulatif PDF envoyé par finance@stockly.ai)
+  if (canWrite() && !S.demo) {
+    const f = { no: el('input', { value: sk ? sk.invoice_no : '', placeholder: '2186-4' }), date: el('input', { type: 'date', value: sk && sk.invoice_date ? sk.invoice_date : '' }),
+      ht20: el('input', { value: sk ? moneyIn(sk.ht20) : '', placeholder: '0,00' }), tva20: el('input', { value: sk ? moneyIn(sk.tva20) : '', placeholder: '0,00' }),
+      ht0: el('input', { value: sk ? moneyIn(sk.ht0) : '', placeholder: '0,00' }), src: el('input', { value: sk && sk.source ? sk.source : '', placeholder: 'Récapitulatif PDF reçu le …' }) };
+    const c = x => { const a = parseAmount(x.value); if (a === null) return 0; if (Number.isNaN(a)) throw new Error('Montant invalide : ' + x.value); return Math.round(a * 100); };
+    const save = () => act(async () => {
+      await api('POST', '/api/psp/vat/stockly', { month: cur.month, invoice_no: f.no.value.trim(), invoice_date: f.date.value, ht20: c(f.ht20), tva20: c(f.tva20), ht0: c(f.ht0), source: f.src.value.trim() });
+      render();
+    }, 'Facture Stockly enregistrée');
+    body.appendChild(el('details', { class: 'panel', style: 'margin-top:12px', open: sk ? null : 'open' },
+      el('summary', {}, el('strong', {}, `Facture Stockly de ${monthLabel(cur.month).toLowerCase()}`), sk ? ` — n° ${sk.invoice_no} saisie` : ' — à saisir'),
+      el('p', { class: 'small muted' }, 'Montants du récapitulatif « Invoicing Recap » envoyé chaque début de mois par finance@stockly.ai (facture émise par TSG Lab au nom de Footkorner), tableau « VAT breakdown ».'),
+      el('div', { class: 'row' }, el('label', { class: 'f' }, 'N° de facture', f.no), el('label', { class: 'f' }, 'Date', f.date),
+        el('label', { class: 'f' }, 'HT à 20 %', f.ht20), el('label', { class: 'f' }, 'TVA à 20 %', f.tva20), el('label', { class: 'f' }, 'HT à 0 %', f.ht0)),
+      el('div', { class: 'row', style: 'margin-top:8px' }, el('label', { class: 'f grow' }, 'Source', f.src), el('button', { class: 'primary', onclick: save }, 'Enregistrer'))));
+  }
+  body.appendChild(el('div', { class: 'small muted', style: 'margin-top:10px' },
+    'Mise à jour automatique : le 2 de chaque mois pour le mois précédent, chaque lundi pour le mois en cours (chiffres provisoires). Ces montants sont à valider par le comptable avant déclaration.'));
 }
 
 async function pspForecastTab(body, p, go) {

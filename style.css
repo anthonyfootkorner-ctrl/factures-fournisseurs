@@ -391,3 +391,7 @@ tr.row-bad td { font-weight: 600; }
 .hw-fam { display: flex; gap: 12px; flex-wrap: wrap; margin: -4px 0 10px; }
 .hw-fam .fam-chip { font-size: 11px; }
 .f-reset { align-self: flex-start; margin-top: 6px; }
+
+/* Suivi encaissements web — onglet TVA & CA */
+tr.vat-on td { background: var(--brand-soft); }
+tr.vat-total td { border-top: 2px solid var(--line); }

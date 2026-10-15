@@ -234,6 +234,9 @@ async function apiRoute(method, url, body) {
   if (method === 'GET' && R(/^\/api\/psp\/forecast$/)) return SB.rpc('psp_forecast', { p: q });
   if (method === 'GET' && R(/^\/api\/psp\/sales-by-day$/)) return SB.rpc('psp_sales_by_day', { p: q });
   if (method === 'POST' && R(/^\/api\/psp\/forecast-rules\/(\d+)$/)) return SB.rpc('psp_forecast_rule_update', { p_id: +m[1], p: body });
+  if (method === 'GET' && R(/^\/api\/psp\/vat$/)) return SB.rpc('psp_vat_summary', { p: q });
+  if (method === 'POST' && R(/^\/api\/psp\/vat\/refresh$/)) return SB.rpc('psp_vat_refresh', { p: body });
+  if (method === 'POST' && R(/^\/api\/psp\/vat\/stockly$/)) return SB.rpc('psp_vat_stockly_set', { p: { ...body, demo } });
   throw new Error('Route inconnue : ' + method + ' ' + path);
 }
 
