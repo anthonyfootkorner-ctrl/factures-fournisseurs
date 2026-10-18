@@ -395,3 +395,58 @@ tr.row-bad td { font-weight: 600; }
 /* Suivi encaissements web — onglet TVA & CA */
 tr.vat-on td { background: var(--brand-soft); }
 tr.vat-total td { border-top: 2px solid var(--line); }
+
+/* ---------------------------------------------------------------- tableau de bord simplifié (cartes, courbe, listes) */
+.aside-col { display: flex; flex-direction: column; gap: 0; }
+.dash-kpis { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); color: var(--ink); display: block; position: relative; margin-bottom: 18px; }
+.dash-kpis .card { margin-bottom: 0; }
+a.card:hover { border-color: var(--brand-2); color: var(--ink); }
+.card.brand { background: linear-gradient(135deg, #2b1707 0%, #191b1f 70%); border-color: rgba(255, 107, 26, .45); }
+.card.bad { border-color: rgba(255, 92, 92, .4); } .card.ok { border-color: rgba(62, 207, 142, .35); }
+.card .k { color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card .k .kic { width: 18px; height: 18px; color: var(--brand-2); opacity: .9; }
+.card .v { font-size: 30px; font-weight: 600; color: #fff; letter-spacing: -.02em; margin: 6px 0 2px; font-variant-numeric: tabular-nums; line-height: 1.1; display: block; }
+a.v:hover { color: var(--brand-2); }
+.card.bad .v { color: var(--bad); } .card.ok .v { color: var(--ok); }
+.card .s { color: var(--muted); font-size: 12px; } .card .s .cap { color: var(--ink2); font-weight: 500; text-transform: capitalize; }
+.mini { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.mini > span { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; color: var(--ink2); font-size: 12px; align-items: center; }
+.mini > span b { font-weight: 500; color: #fff; font-variant-numeric: tabular-nums; }
+.mini .bar { grid-column: 1 / -1; height: 4px; background: rgba(255, 255, 255, .08); border-radius: 2px; overflow: hidden; }
+.mini .bar i { display: block; height: 100%; background: var(--brand); border-radius: 2px; }
+.mnav { display: inline-flex; gap: 4px; }
+.mnav button { background: var(--panel3); border: 0; color: var(--ink2); width: 26px; height: 26px; border-radius: 8px; cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
+.mnav button:hover { background: var(--brand); color: #111; } .mnav button:disabled { opacity: .3; cursor: default; background: var(--panel3); color: var(--ink2); }
+.chips { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.card-head h2 { margin: 0; font-size: 15px; font-weight: 500; color: #fff; } .card-head h2 .small { font-weight: 400; } .card-head h2 .small b { color: var(--brand-2); font-weight: 500; }
+.card-head .more { font-size: 12px; color: var(--muted); } .card-head .more:hover { color: var(--brand-2); }
+.tabs { display: inline-flex; background: var(--panel3); border-radius: 10px; padding: 3px; gap: 2px; }
+.tabs button { background: transparent; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 500; }
+.tabs button:hover { color: #fff; } .tabs button.on { background: var(--panel); color: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .4); }
+.chart-card .small { margin-top: 8px; }
+.area-chart { width: 100%; height: auto; display: block; }
+.area-chart .grid { stroke: var(--line2); stroke-width: 1; }
+.area-chart .line { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linejoin: round; }
+.area-chart circle { fill: var(--panel); stroke: var(--brand); stroke-width: 2.5; transition: r .15s; }
+.area-chart .pt.late circle { stroke: var(--bad); }
+.area-chart .pt { cursor: pointer; } .area-chart .pt:hover circle { r: 7; }
+.area-chart .xlab, .area-chart .ylab { fill: var(--muted); font-size: 11px; } .area-chart .vlab { fill: #fff; font-size: 11px; }
+.list { display: flex; flex-direction: column; }
+.list > a { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line2); color: var(--ink); }
+.list > a:first-child { border-top: 0; } .list > a:hover .t { color: var(--brand-2); }
+.list .t { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .m { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .r { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 500; white-space: nowrap; } .list .r .m { font-size: 11px; font-weight: 400; }
+.av { width: 38px; height: 38px; border-radius: 12px; display: inline-grid; place-items: center; color: #fff; font-size: 13px; font-weight: 600; flex: none; overflow: hidden; letter-spacing: .02em; }
+.av.logo { background: #fff; padding: 6px; } .av img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.av.sm { width: 28px; height: 28px; border-radius: 8px; font-size: 11px; } .av.sm.logo { padding: 4px; }
+.todo .card-head { margin-bottom: 6px; }
+.todo-item { display: grid; grid-template-columns: 40px 1fr; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line2); color: var(--ink2); font-size: 13px; }
+.todo-item:first-of-type { border-top: 0; }
+.todo-item b { font-size: 16px; font-weight: 600; color: #fff; text-align: center; background: var(--panel3); border-radius: 10px; padding: 6px 0; font-variant-numeric: tabular-nums; }
+.todo-item.bad b { background: var(--bad-soft); color: var(--bad); } .todo-item.warn b { background: var(--warn-soft); color: var(--warn); } .todo-item.ok b { background: var(--ok-soft); color: var(--ok); }
+.todo-item .m { color: var(--muted); font-size: 11px; } .todo-item:hover span { color: var(--brand-2); }
+@media (max-width: 1150px) { .dash-kpis { grid-template-columns: 1fr 1fr; } .dash-kpis .card.brand { grid-column: 1 / -1; } }
+@media (max-width: 700px) { .dash-kpis { grid-template-columns: 1fr; } .dash-lists { grid-template-columns: 1fr; } .card { padding: 16px; } .card .v { font-size: 26px; } }

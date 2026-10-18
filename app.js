@@ -472,20 +472,168 @@ async function echeancesHero(view, base) {
       (w.fournisseurs || []).length > 4 ? el('div', { class: 'hw-more' }, `+ ${w.fournisseurs.length - 4} autre(s) fournisseur(s)`) : null)))));
 }
 
+// ------------------------------------------------------------------ logos et avatars fournisseurs
+// Logos SVG dans web/logos/ (Wikimedia Commons, usage interne) ; sinon initiales sur fond coloré stable.
+const LOGOS = [
+  [/\bnike\b/i, 'nike'], [/adidas/i, 'adidas'], [/asics/i, 'asics'], [/under armour/i, 'underarmour'], [/\bpuma\b/i, 'puma'],
+  [/saucony|wolverine/i, 'saucony'], [/tiktok/i, 'tiktok'], [/\bpvh\b/i, 'pvh'], [/\bups\b|united parcel/i, 'ups'], [/\bcic\b/i, 'cic'],
+  [/\bedf\b|electricit[eé] de france/i, 'edf'], [/columbia/i, 'columbia'], [/volkswagen/i, 'volkswagen'], [/^orange\b/i, 'orange'],
+  [/mercedes/i, 'mercedes'], [/\bkappa\b/i, 'kappa'], [/casio/i, 'casio'], [/shopify/i, 'shopify'], [/google/i, 'google'],
+  [/\bmeta\b|facebook/i, 'meta'], [/converse/i, 'converse'], [/reebok/i, 'reebok'], [/\bvans\b/i, 'vans'], [/north face/i, 'thenorthface'],
+  [/\bfila\b/i, 'fila'], [/birkenstock/i, 'birkenstock'], [/stripe/i, 'stripe'], [/paypal/i, 'paypal'], [/amazon/i, 'amazon'],
+  [/bouygues/i, 'bouygues'], [/engie/i, 'engie'], [/edenred/i, 'edenred'],
+];
+function supAvatar(name, cls) {
+  const n = name || '?';
+  const hit = LOGOS.find(([re]) => re.test(n));
+  if (hit) return el('span', { class: 'av logo ' + (cls || '') }, el('img', { src: 'logos/' + hit[1] + '.svg', alt: n, loading: 'lazy' }));
+  const words = n.replace(/[^0-9A-Za-zÀ-ÿ ]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const ini = (words.slice(0, 2).map(w => w[0]).join('') || '?').toUpperCase();
+  let h = 0; for (const ch of n) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return el('span', { class: 'av ' + (cls || ''), style: `background:hsl(${h} 32% 30%)` }, ini);
+}
+
+// ------------------------------------------------------------------ courbe lissée avec aire (tableau de bord)
+function areaChart(points, opts = {}) {
+  // points: [{label, v, title, href, cls}]
+  const W = 720, H = opts.h || 230, padL = 52, padR = 18, padT = 24, padB = 30;
+  const max = Math.max(1, ...points.map(p => p.v));
+  const n = points.length;
+  const x = i => padL + (n <= 1 ? (W - padL - padR) / 2 : i * (W - padL - padR) / (n - 1));
+  const y = v => padT + (H - padT - padB) * (1 - v / max);
+  const pts = points.map((p, i) => [x(i), y(p.v)]);
+  let line = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 0; i < pts.length - 1; i++) { const [x0, y0] = pts[i], [x1, y1] = pts[i + 1]; const cx = (x0 + x1) / 2; line += ` C${cx},${y0} ${cx},${y1} ${x1},${y1}`; }
+  const area = line + ` L${pts[pts.length - 1][0]},${H - padB} L${pts[0][0]},${H - padB} Z`;
+  const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'area-chart', role: 'img' });
+  const grad = svg('linearGradient', { id: 'area-grad', x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.append(svg('stop', { offset: '0%', 'stop-color': '#ff6b1a', 'stop-opacity': .45 }), svg('stop', { offset: '100%', 'stop-color': '#ff6b1a', 'stop-opacity': 0 }));
+  g.appendChild(svg('defs', {}, grad));
+  for (let t = 0; t <= 4; t++) {
+    const yy = padT + (H - padT - padB) * (1 - t / 4);
+    g.appendChild(svg('line', { x1: padL, x2: W - padR, y1: yy, y2: yy, class: 'grid' }));
+    g.appendChild(svg('text', { x: padL - 8, y: yy + 4, 'text-anchor': 'end', class: 'ylab' }, shortMoney(max * t / 4)));
+  }
+  g.appendChild(svg('path', { d: area, fill: 'url(#area-grad)' }));
+  g.appendChild(svg('path', { d: line, class: 'line' }));
+  points.forEach((p, i) => {
+    const grp = svg('g', { class: 'pt' + (p.cls ? ' ' + p.cls : '') });
+    grp.appendChild(svg('title', {}, p.title || ''));
+    grp.appendChild(svg('circle', { cx: pts[i][0], cy: pts[i][1], r: 5 }));
+    if (p.v) grp.appendChild(svg('text', { x: pts[i][0], y: pts[i][1] - 12, 'text-anchor': 'middle', class: 'vlab' }, shortMoney(p.v)));
+    grp.appendChild(svg('text', { x: pts[i][0], y: H - 8, 'text-anchor': 'middle', class: 'xlab' }, p.label));
+    if (p.href) { grp.setAttribute('tabindex', '0'); grp.addEventListener('click', () => { location.hash = p.href; }); }
+    g.appendChild(grp);
+  });
+  return g;
+}
+
 // ------------------------------------------------------------------ tableau de bord
 async function viewDashboard(view) {
   const p = Object.assign({ company_id: '', supplier_id: '', from: '', to: '', famille: '' }, getHashParams());
   const go = np => { location.hash = '#/?' + new URLSearchParams(Object.fromEntries(Object.entries(np).filter(([, v]) => v))); };
-  const base = { company_id: p.company_id, supplier_id: p.supplier_id, from: p.from, to: p.to, famille: p.famille };
-  const left = el('div', { class: 'synth-main' });
+  const base = { company_id: p.company_id, supplier_id: p.supplier_id, famille: p.famille };
+  const clean = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v));
+  const link = extra => '#/factures?' + new URLSearchParams(clean({ ...base, doc_type: 'facture', open: '1', ...extra }));
+  const addDays = (iso, n) => { const x = new Date(iso + 'T12:00:00'); x.setDate(x.getDate() + n); return isoDate(x); };
+  const moisLib = (ym, long) => new Date(ym + '-01T12:00:00').toLocaleDateString('fr-FR', long ? { month: 'long', year: 'numeric' } : { month: 'short', year: '2-digit' });
+  const finMois = ym => { const x = new Date(ym + '-01T12:00:00'); x.setMonth(x.getMonth() + 1); x.setDate(0); return isoDate(x); };
+  const left = el('div', { class: 'synth-main dash' });
+  const todo = el('div', { class: 'todo-slot' });
   const sub = [p.famille ? famLabels(p.famille).join(' + ') : '', p.from || p.to ? `factures ${p.from ? 'du ' + d(p.from) : ''} ${p.to ? 'au ' + d(p.to) : ''}`.trim() : ''].filter(Boolean).join(' · ');
   view.append(el('h1', {}, 'Tableau de bord'), sub ? el('div', { class: 'muted page-sub' }, sub) : null,
-    el('div', { class: 'synth-layout' }, left, filtersAside(p, go, { fiscal: true, presets: true, company: true, supplier: true, note: 'Les échéances à venir ne dépendent pas des dates de facture ; le reste du tableau de bord, oui.' })));
-  view = left;
-  await echeancesHero(view, { company_id: p.company_id, supplier_id: p.supplier_id, famille: p.famille });
-  const data = await api('GET', '/api/dashboard?' + qs(p));
-  const link = extra => '#/factures?' + new URLSearchParams(Object.fromEntries(Object.entries({ ...base, ...extra }).filter(([, v]) => v)));
-  // Alertes
+    el('div', { class: 'synth-layout' }, left, el('div', { class: 'aside-col' }, todo,
+      filtersAside(p, go, { fiscal: true, presets: true, company: true, supplier: true, note: 'Les échéances ne dépendent pas des dates de facture ; l\'onglet « Facturé » et les alertes, oui.' }))));
+  const [ech, syn, data, treso] = await Promise.all([
+    api('GET', '/api/echeances?' + qs(base)), api('GET', '/api/synthese?' + qs(base)).catch(() => null),
+    api('GET', '/api/dashboard?' + qs(p)), api('GET', '/api/treasury?' + qs({})).catch(() => ({})),
+  ]);
+  const cur = 'EUR';
+  const c = (data.currencies || {})[cur];
+  const sem = syn && syn.currencies[cur] ? syn.currencies[cur].semaines : [];
+  const monday = syn ? syn.semaine_courante : ech.today;
+  const today = ech.today;
+
+  // --- 1. trois cartes : 3 prochaines semaines, retard, mois
+  const weeks = [0, 7, 14].map((off, i) => {
+    const ws = addDays(monday, off), we = addDays(ws, 6);
+    const w = sem.find(x => x.semaine === ws) || { n: 0, montant: 0, valide: 0 };
+    return { ...w, ws, we, title: ['Cette semaine', 'Semaine prochaine', 'Dans 2 semaines'][i] };
+  });
+  const total3 = weeks.reduce((s, w) => s + (w.montant || 0), 0), n3 = weeks.reduce((s, w) => s + (w.n || 0), 0);
+  const max3 = Math.max(1, ...weeks.map(w => w.montant || 0));
+  const card3 = el('a', { class: 'card brand', href: link({ due_from: monday, due_to: addDays(monday, 20) }) },
+    el('div', { class: 'k' }, 'À régler dans les 3 prochaines semaines', icon('reste', 'kic')),
+    el('div', { class: 'v' }, money(total3, cur)),
+    el('div', { class: 's' }, `${n3} facture(s) · du ${d(monday)} au ${d(addDays(monday, 20))}`),
+    el('div', { class: 'mini' }, weeks.map(w => el('span', {}, el('span', {}, w.title, ' ', el('span', { class: 'muted' }, `${d(w.ws).slice(0, 5)} → ${d(w.we).slice(0, 5)}`)),
+      el('b', {}, money(w.montant || 0, cur)), el('span', { class: 'bar' }, el('i', { style: `width:${(w.montant || 0) / max3 * 100}%` }))))));
+  const retard = ech.retard || { n: 0, total: 0 };
+  const cardLate = el('a', { class: 'card ' + (retard.total ? 'bad' : 'ok'), href: link({ situation: 'en_retard' }) },
+    el('div', { class: 'k' }, 'Déjà en retard', icon('#/a-verifier', 'kic')),
+    el('div', { class: 'v' }, money(retard.total, cur)),
+    el('div', { class: 's' }, retard.n ? `${retard.n} facture(s) dont l'échéance est passée` : 'Aucune facture en retard'),
+    ech.sans_echeance && ech.sans_echeance.n ? el('div', { class: 'mini' }, el('span', {}, el('span', {}, 'Sans échéance connue'), el('b', {}, money(ech.sans_echeance.total, cur)))) : null,
+    treso[cur] ? el('div', { class: 'mini' }, el('span', {}, el('span', {}, `Trésorerie au ${d(treso[cur].date_max)}`), el('b', { class: treso[cur].solde < 0 ? 'fc-bad' : 'fc-ok' }, money(treso[cur].solde, cur)))) : null);
+  const mois = ech.mois || [];
+  let mi = Math.max(0, mois.findIndex(m => m.mois === today.slice(0, 7)));
+  const cardMois = el('div', { class: 'card' });
+  const renderMois = () => {
+    const m = mois[mi];
+    const fams = Object.keys(FAMILLES).filter(k => (m.familles || {})[k]);
+    cardMois.replaceChildren(
+      el('div', { class: 'k' }, 'Échéances du mois', el('span', { class: 'mnav' },
+        el('button', { type: 'button', disabled: mi === 0, onclick: () => { mi--; renderMois(); }, title: 'Mois précédent' }, '‹'),
+        el('button', { type: 'button', disabled: mi >= mois.length - 1, onclick: () => { mi++; renderMois(); }, title: 'Mois suivant' }, '›'))),
+      el('a', { class: 'v', href: link({ due_from: m.mois + '-01', due_to: finMois(m.mois) }) }, money(m.total, cur)),
+      el('div', { class: 's' }, el('b', { class: 'cap' }, moisLib(m.mois, true)), ` · ${m.n} facture(s)` + (m.dont_retard ? ` · ${money(m.dont_retard, cur)} déjà en retard` : '')),
+      fams.length ? el('div', { class: 'chips' }, fams.map(k => el('a', { href: link({ due_from: m.mois + '-01', due_to: finMois(m.mois), famille: k }), class: 'fam-chip fam-' + k },
+        el('span', { class: 'fam-dot fam-' + k }), FAMILLES[k] + ' ', el('b', {}, money(m.familles[k], cur))))) : el('div', { class: 'muted small' }, 'Rien à régler ce mois-ci.'));
+  };
+  if (mois.length) renderMois();
+  left.appendChild(el('div', { class: 'dash-kpis' }, card3, cardLate, cardMois));
+
+  // --- 2. graphique principal avec onglets
+  const chartBox = el('div', {}), chartNote = el('div', { class: 'muted small' });
+  const tabs = [
+    ['mois', 'À régler par mois', () => { chartNote.textContent = 'Reste à régler selon le mois d\'échéance. Les mois passés sont des retards ; cliquez un point pour voir les factures.';
+      return areaChart(mois.map(m => ({ label: moisLib(m.mois), v: m.total, cls: m.mois < today.slice(0, 7) ? 'late' : '', href: link({ due_from: m.mois + '-01', due_to: finMois(m.mois) }),
+        title: `${moisLib(m.mois, true)} : ${money(m.total, cur)} (${m.n} facture(s))` + (m.dont_retard ? ` — dont en retard ${money(m.dont_retard, cur)}` : '') }))); }],
+    ['semaines', 'Par semaine', () => { chartNote.textContent = 'Reste à régler par semaine d\'échéance sur les 12 prochaines semaines (hors retards).';
+      const pts = Array.from({ length: 12 }, (_, i) => { const ws = addDays(monday, i * 7), w = sem.find(x => x.semaine === ws) || { n: 0, montant: 0 };
+        return { label: d(ws).slice(0, 5), v: w.montant || 0, href: link({ due_from: ws, due_to: addDays(ws, 6) }), title: `Semaine du ${d(ws)} : ${money(w.montant || 0, cur)} (${w.n || 0} facture(s))` }; });
+      return areaChart(pts); }],
+    ['facture', 'Facturé par mois', () => { chartNote.textContent = 'Montants facturés TTC par mois de facture (avoirs non déduits), sur la période des filtres.';
+      const ms = (c ? c.mensuel : []).slice(-12);
+      return ms.length ? areaChart(ms.map(m => ({ label: moisLib(m.mois), v: m.factures, href: '#/factures?' + new URLSearchParams(clean({ ...base, doc_type: 'facture', from: m.mois + '-01', to: finMois(m.mois) })),
+        title: `${moisLib(m.mois, true)} : ${money(m.factures, cur)} TTC (HT ${money(m.factures_ht, cur)})` }))) : el('div', { class: 'muted' }, 'Aucune facture datée sur la période.'); }],
+  ];
+  const tabBar = el('div', { class: 'tabs' });
+  const showTab = key => { tabBar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === key)); chartBox.replaceChildren(tabs.find(t => t[0] === key)[2]()); };
+  tabs.forEach(([k, lab]) => tabBar.appendChild(el('button', { type: 'button', 'data-k': k, onclick: () => showTab(k) }, lab)));
+  showTab('mois');
+  left.appendChild(el('div', { class: 'card chart-card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Vue d\'ensemble'), tabBar), chartBox, chartNote));
+
+  // --- 3. listes : prochaines échéances, fournisseurs à régler
+  const proch = ech.prochaines || [], tops = ech.top_fournisseurs || [];
+  const listEch = el('div', { class: 'list' }, proch.length ? proch.map(f => el('a', { href: '#/factures/' + f.id },
+    supAvatar(f.supplier_name), el('span', {}, el('div', { class: 't' }, f.supplier_name), el('div', { class: 'm' }, (f.reference ? 'N° ' + f.reference + ' · ' : '') + 'échéance le ' + d(f.due_date) + (f.validation_status === 'a_verifier' ? ' · à vérifier' : ''))),
+    el('span', { class: 'r' }, money(f.balance, cur), el('div', { class: 'm' }, f.due_date === today ? 'aujourd\'hui' : f.due_date < addDays(today, 7) ? 'cette semaine' : '')))) : el('div', { class: 'muted' }, 'Aucune échéance à venir.'));
+  const listSup = el('div', { class: 'list' }, tops.length ? tops.map(t => el('a', { href: t.supplier_id ? '#/fournisseurs/' + t.supplier_id : link({}) },
+    supAvatar(t.supplier_name), el('span', {}, el('div', { class: 't' }, t.supplier_name), el('div', { class: 'm' }, `${t.n} facture(s) · ${FAMILLES[t.famille] || t.famille}`)),
+    el('span', { class: 'r' }, money(t.total, cur), el('div', { class: 'm' + (t.retard ? ' fc-bad' : '') }, t.retard ? 'en retard : ' + money(t.retard, cur) : 'à jour')))) : el('div', { class: 'muted' }, 'Rien à régler.'));
+  // règlements de la semaine : fournisseurs à payer entre lundi et dimanche
+  const w0 = weeks[0], wsup = (w0.fournisseurs || []).slice().sort((a, b) => b.montant - a.montant);
+  const listWeek = el('div', { class: 'list' }, wsup.length ? wsup.map(f => el('a', { href: link({ due_from: w0.ws, due_to: w0.we, supplier_id: f.supplier_id || '' }) },
+    supAvatar(f.supplier_name), el('span', {}, el('div', { class: 't' }, f.supplier_name), el('div', { class: 'm' }, `${f.n} facture(s)` + (f.premiere_echeance ? ' · dès le ' + d(f.premiere_echeance) : ''))),
+    el('span', { class: 'r' }, money(f.montant, cur)))) : el('div', { class: 'muted' }, 'Rien à régler cette semaine.'));
+  left.appendChild(el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Règlements de la semaine', el('span', { class: 'muted small' }, ` · du ${d(w0.ws)} au ${d(w0.we)} · `, el('b', {}, money(w0.montant || 0, cur)))),
+    el('a', { class: 'more', href: link({ due_from: w0.ws, due_to: w0.we }) }, 'Voir les factures')), listWeek));
+  left.appendChild(el('div', { class: 'grid2 dash-lists' },
+    el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Prochaines échéances'), el('a', { class: 'more', href: link({ due_from: today }) }, 'Tout voir')), listEch),
+    el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Fournisseurs à régler'), el('a', { class: 'more', href: '#/fournisseurs' }, 'Tous')), listSup)));
+
+  // --- 4. à traiter (colonne de droite)
   const al = data.alertes || {};
   const alertItems = [
     ['iban_modifie', 'Changement d\'IBAN à contrôler', 'b-bad'], ['doublon_potentiel', 'Doublons potentiels', 'b-bad'],
@@ -494,69 +642,14 @@ async function viewDashboard(view) {
     ['ocr_requis', 'Scans sans OCR', 'b-bad'], ['pas_une_facture', 'Documents qui ne sont pas des factures', 'b-warn'],
     ['echeance_avant_facture', 'Échéance antérieure à la facture', 'b-bad'], ['extraction_incertaine', 'Lectures incertaines', 'b-warn'],
   ].filter(a => al[a[0]]);
-  const alertPanel = el('div', { class: 'panel' }, el('h2', {}, 'Alertes'),
-    alertItems.length || data.imports_en_erreur ? el('div', { class: 'row' },
-      alertItems.map(a => el('a', { href: link({ anomaly: a[0], validation: 'a_verifier' }), class: 'badge ' + a[2] }, `${a[1]} : ${al[a[0]]}`)),
-      data.imports_en_erreur ? el('a', { href: '#/imports', class: 'badge b-bad' }, `Imports en erreur ou à compléter : ${data.imports_en_erreur}`) : null)
-      : el('div', { class: 'muted' }, 'Aucune alerte en cours.'));
-  view.appendChild(alertPanel);
-  const curs = Object.keys(data.currencies);
-  if (!curs.length) { view.appendChild(el('div', { class: 'panel empty' }, 'Aucune facture pour ces filtres. Commencez par un import.')); return; }
-  if (curs.length > 1) view.appendChild(el('div', { class: 'callout info' }, `Plusieurs devises (${curs.join(', ')}) : les totaux sont présentés séparément, sans conversion.`));
-  const treso = await api('GET', '/api/treasury?' + qs({})).catch(() => ({}));
-  for (const cur of curs) {
-    const c = data.currencies[cur];
-    const tr = treso[cur];
-    const box = el('section', {});
-    if (curs.length > 1) box.appendChild(el('h2', {}, 'Devise : ' + cur));
-    const kpi = (lab, v, sub, cls, href) => el('div', { class: 'kpi ' + (cls || '') }, el('a', { href: href || null }, el('div', { class: 'l' }, lab), el('div', { class: 'v' }, money(v, cur)), sub ? el('div', { class: 's' }, sub) : null));
-    box.appendChild(el('div', { class: 'kpis' },
-      tr ? kpi('Trésorerie (derniers soldes connus)', tr.solde, `${tr.comptes} compte(s), au ${d(tr.date_max)}${tr.date_min !== tr.date_max ? ' (le plus ancien : ' + d(tr.date_min) + ')' : ''}`, 'ok', '#/banque') : null,
-      tr ? kpi('Trésorerie après retards et échéances ≤ 30 j', tr.solde - c.en_retard.montant - c.echeance_30j.montant, 'factures connues uniquement (validées et à vérifier)', tr.solde - c.en_retard.montant - c.echeance_30j.montant < 0 ? 'bad' : '', '#/banque') : null,
-      kpi('Total restant à payer', c.restant.montant, `${c.restant.n} facture(s)`, '', link({ open: '1', doc_type: 'facture' })),
-      kpi('dont validé', c.restant_valide.montant, `${c.restant_valide.n} facture(s)`, 'ok', link({ open: '1', doc_type: 'facture', validation: 'validee' })),
-      kpi('dont à vérifier', c.restant_a_verifier.montant, `${c.restant_a_verifier.n} facture(s)`, 'warn', link({ open: '1', doc_type: 'facture', validation: 'a_verifier' })),
-      kpi('En retard', c.en_retard.montant, `${c.en_retard.n} facture(s)`, 'bad', link({ situation: 'en_retard', doc_type: 'facture' })),
-      kpi('Échéance ≤ 7 jours', c.echeance_7j.montant, `${c.echeance_7j.n} facture(s)`),
-      kpi('Échéance ≤ 15 jours', c.echeance_15j.montant, `${c.echeance_15j.n} facture(s)`),
-      kpi('Échéance ≤ 30 jours', c.echeance_30j.montant, `${c.echeance_30j.n} facture(s)`),
-      kpi('Sans échéance', c.sans_echeance.montant, `${c.sans_echeance.n} facture(s) — non réparties`, 'warn', link({ situation: 'sans_echeance', doc_type: 'facture' })),
-      kpi('En litige', c.litige.montant, `${c.litige.n} facture(s)`, c.litige.n ? 'bad' : '', link({ situation: 'litige' })),
-      kpi('À vérifier (tous documents)', c.a_verifier.montant, `${c.a_verifier.n} document(s), montant TTC`, 'warn', '#/a-verifier'),
-      kpi('Crédits fournisseurs (avoirs non imputés)', c.credits_disponibles.montant, `${c.credits_disponibles.n} avoir(s) — non déduits des totaux`, 'ok', link({ doc_type: 'avoir', open: '1' })),
-    ));
-    // Prévision hebdo
-    const wk = c.prevision_semaines;
-    const fc = el('div', { class: 'panel' }, el('h2', {}, 'Prévision des décaissements par semaine (selon les échéances)'),
-      barChart([
-        { label: 'Retard', values: [{ v: c.prevision_hors_semaines.en_retard, cls: 'bar-bad', title: 'Déjà en retard : ' + money(c.prevision_hors_semaines.en_retard, cur) }] },
-        ...wk.map((w, i) => ({ label: i === 0 ? 'Cette sem.' : 'S+' + i, sub: d(w.debut).slice(0, 5),
-          values: [{ v: w.valide, cls: 'bar', title: `Semaine du ${d(w.debut)} — validé : ${money(w.valide, cur)}` }, { v: w.montant - w.valide, cls: 'bar2', title: `à vérifier : ${money(w.montant - w.valide, cur)}` }] })),
-        { label: 'Sans éch.', values: [{ v: c.prevision_hors_semaines.sans_echeance, cls: 'bar-grey', title: 'Sans échéance : ' + money(c.prevision_hors_semaines.sans_echeance, cur) }] },
-      ]),
-      el('div', { class: 'legend' }, el('span', {}, el('i', { style: 'background:#ff6b1a' }), 'Validé'), el('span', {}, el('i', { style: 'background:#ffb27a' }), 'À vérifier'),
-        el('span', {}, el('i', { style: 'background:#ff5c5c' }), 'En retard (à régulariser)'), el('span', {}, el('i', { style: 'background:#5b6068' }), 'Sans échéance (non réparti)')));
-    // Balance âgée
-    const ag = c.balance_agee;
-    const agItems = [['non_echu', 'Non échu', '#ff6b1a'], ['r1_30', '1–30 j', '#f5b84a'], ['r31_60', '31–60 j', '#ff8f4d'], ['r61_90', '61–90 j', '#ff5c5c'], ['r90p', '> 90 j', '#b3261e'], ['sans_echeance', 'Sans échéance', '#5b6068'], ['litige', 'En litige', '#b48cf2']];
-    const agTotal = agItems.reduce((s, a) => s + ag[a[0]], 0) || 1;
-    const agingPanel = el('div', { class: 'panel' }, el('h2', {}, 'Balance âgée (solde restant dû)'),
-      el('div', { class: 'aging' }, agItems.filter(a => ag[a[0]] > 0).map(a => { const x = el('div', { style: `width:${ag[a[0]] / agTotal * 100}%;background:${a[2]}` }); x.title = `${a[1]} : ${money(ag[a[0]], cur)}`; return x; })),
-      el('table', {}, el('tbody', {}, agItems.map(a => el('tr', {}, el('td', {}, el('i', { style: `display:inline-block;width:10px;height:10px;background:${a[2]};margin-right:6px` }), a[1]), el('td', { class: 'num' }, money(ag[a[0]], cur)))))));
-    // Top fournisseurs
-    const top = el('div', { class: 'panel' }, el('h2', {}, 'Principaux fournisseurs par montant restant dû'),
-      c.top_fournisseurs.length ? el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Fournisseur'), el('th', { class: 'num' }, 'Factures'), el('th', { class: 'num' }, 'Restant dû'), el('th', { class: 'num' }, 'dont retard'))),
-        el('tbody', {}, c.top_fournisseurs.map(t => el('tr', {}, el('td', {}, t.supplier_id ? el('a', { href: '#/fournisseurs/' + t.supplier_id }, t.supplier_name || '—') : (t.supplier_name || el('span', { class: 'todo' }, 'Fournisseur non identifié'))),
-          el('td', { class: 'num' }, t.n), el('td', { class: 'num' }, money(t.montant, cur)), el('td', { class: 'num' }, t.retard ? money(t.retard, cur) : '—')))))
-        : el('div', { class: 'muted' }, 'Rien à payer.'));
-    // Mensuel
-    const monthly = el('div', { class: 'panel' }, el('h2', {}, 'Montants facturés par mois (TTC)'),
-      c.mensuel.length ? [barChart(c.mensuel.map(m => ({ label: m.mois.slice(5) + '/' + m.mois.slice(2, 4), values: [{ v: m.factures, title: `${m.mois} — factures : ${money(m.factures, cur)} (HT ${money(m.factures_ht, cur)})` }] })), { h: 200 }),
-        el('div', { class: 'legend' }, el('span', {}, 'Avoirs de la période : ' + money(c.mensuel.reduce((s, m) => s + m.avoirs, 0), cur)))]
-        : el('div', { class: 'muted' }, 'Aucune facture datée sur la période.'));
-    box.append(fc, el('div', { class: 'grid2' }, agingPanel, top), monthly);
-    view.appendChild(box);
-  }
+  const items = [];
+  if (c && c.a_verifier.n) items.push(el('a', { class: 'todo-item', href: '#/a-verifier' }, el('b', {}, c.a_verifier.n), el('span', {}, 'document(s) à vérifier', el('div', { class: 'm' }, money(c.a_verifier.montant, cur)))));
+  if (data.imports_en_erreur) items.push(el('a', { class: 'todo-item bad', href: '#/imports' }, el('b', {}, data.imports_en_erreur), el('span', {}, 'import(s) en erreur ou à compléter')));
+  if (c && c.litige.n) items.push(el('a', { class: 'todo-item', href: link({ situation: 'litige' }) }, el('b', {}, c.litige.n), el('span', {}, 'facture(s) en litige', el('div', { class: 'm' }, money(c.litige.montant, cur)))));
+  if (c && c.credits_disponibles.n) items.push(el('a', { class: 'todo-item ok', href: link({ doc_type: 'avoir' }) }, el('b', {}, c.credits_disponibles.n), el('span', {}, 'avoir(s) à imputer', el('div', { class: 'm' }, money(c.credits_disponibles.montant, cur)))));
+  alertItems.forEach(a => items.push(el('a', { class: 'todo-item ' + (a[2] === 'b-bad' ? 'bad' : 'warn'), href: link({ anomaly: a[0], validation: 'a_verifier', open: '' }) }, el('b', {}, al[a[0]]), el('span', {}, a[1]))));
+  todo.appendChild(el('div', { class: 'card todo' }, el('div', { class: 'card-head' }, el('h2', {}, 'À traiter')),
+    items.length ? items : el('div', { class: 'muted small' }, 'Rien en attente : tout est à jour.')));
 }
 
 // ------------------------------------------------------------------ filtres

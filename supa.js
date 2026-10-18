@@ -156,6 +156,7 @@ async function apiRoute(method, url, body) {
   if (method === 'GET' && R(/^\/api\/lookups$/)) return SB.rpc('lookups', { p_demo: demo });
   if (method === 'GET' && R(/^\/api\/dashboard$/)) return SB.rpc('dashboard', { p: q });
   if (method === 'GET' && R(/^\/api\/synthese$/)) return SB.rpc('synthese', { p: q });
+  if (method === 'GET' && R(/^\/api\/echeances$/)) return SB.rpc('echeances_par_mois', { p: q });
   if (method === 'POST' && R(/^\/api\/invoices\/files$/)) return SB.rpc('invoices_files', { p: body });
   if (method === 'GET' && R(/^\/api\/pennylane$/)) return SB.rpc('pennylane_overview', {});
   if (method === 'POST' && R(/^\/api\/pennylane\/apply$/)) return SB.rpc('pennylane_apply', { p_validate: !!body.validate, p_limit: body.limit || 50 });
