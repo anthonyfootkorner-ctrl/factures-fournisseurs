@@ -126,7 +126,7 @@ function changeOwnPassword() {
 // ------------------------------------------------------------------ squelette & routage
 const NAV = [
   ['#/', 'Tableau de bord'], ['#/synthese', 'Synthèse'], ['#/factures', 'Factures'], ['#/a-verifier', 'À vérifier'],
-  ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/encaissements', 'Suivi encaissements web'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
+  ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/encaissements', 'Suivi encaissements web'], ['#/negoce', 'Négoce'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
 ];
 let reviewCount = null;
 const ICONS = {
@@ -137,6 +137,7 @@ const ICONS = {
   '#/fournisseurs': 'M3 21V8l9-5 9 5v13M9 21v-6h6v6M3 21h18',
   '#/banque': 'M3 10l9-6 9 6M5 10v8M10 10v8M14 10v8M19 10v8M3 21h18',
   '#/encaissements': 'M2 7h20v12H2zM2 11h20M6 15h4',
+  '#/negoce': 'M3 17l6-6 4 4 8-8M14 7h7v7',
   '#/imports': 'M12 3v12M7 10l5 5 5-5M4 21h16',
   '#/parametres': 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   facture: 'M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h6', paye: 'M20 6L9 17l-5-5', reste: 'M12 7v5l3 3M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z',
@@ -238,6 +239,7 @@ async function render() {
     else if (parts[0] === 'parametres') await viewSettings(view);
     else if (parts[0] === 'banque') await viewBank(view);
     else if (parts[0] === 'synthese') await viewSynthese(view);
+    else if (parts[0] === 'negoce') await NEGOCE.render(view, parts);  // encaissements clients négoce (web/negoce.js)
     else if (parts[0] === 'encaissements') await viewEncaissements(view);
     else view.appendChild(el('p', {}, 'Page introuvable'));
   } catch (e) { view.appendChild(el('div', { class: 'callout bad' }, e.message)); }

@@ -1,0 +1,12 @@
+/* Encaissements négoce — compléments de style (préfixe negoce- ; réutilise .card, .dash-kpis, .list, .tabs, .synth-layout du thème). */
+.negoce-sub { margin: -4px 0 18px; }
+.negoce-sub .tabbtn { display: inline-block; padding: 6px 14px; border-radius: 8px; font-size: 13px; color: var(--muted); }
+.negoce-sub .tabbtn:hover { color: #fff; } .negoce-sub .tabbtn.on { background: var(--panel); color: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .4); }
+.f-inline { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink2); cursor: pointer; }
+.cell-av { display: inline-flex; align-items: center; gap: 10px; }
+h1.with-av { display: flex; align-items: center; gap: 12px; } h1.with-av .av { width: 44px; height: 44px; } h1.with-av .small { font-weight: 400; margin-left: 6px; }
+.check-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; margin-top: 6px; }
+.plan-head, .plan-row { display: grid; grid-template-columns: 1fr 1fr 1fr 36px; gap: 8px; align-items: center; }
+.plan-head { font-size: 11px; color: var(--muted); margin: 10px 0 4px; } .plan-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.plan-row input { width: 100%; min-width: 0; }
+.modal .grid2 { gap: 10px; }
