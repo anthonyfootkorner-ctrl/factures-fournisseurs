@@ -487,3 +487,5 @@ a.v:hover { color: var(--brand-2); }
 .treso-chart .bar-web { fill: #3ecf8e; } .treso-chart .bar-negoce { fill: #2bb3c9; } .treso-chart .bar-fixes { fill: #6fa8ff; }
 .tk-s { color: var(--muted); font-size: 10px; margin-top: 2px; }
 @media (max-width: 900px) { .treso-table th:nth-child(4), .treso-table td:nth-child(4), .treso-table th:nth-child(5), .treso-table td:nth-child(5), .treso-table th:nth-child(6), .treso-table td:nth-child(6) { display: none; } }
+.plan-pick label.pick { cursor: pointer; } .plan-pick label.pick input { width: auto; margin: 0; }
+.plan-card .badge { margin: 0 6px; } .plan-card details { margin-top: 6px; } .plan-card summary { cursor: pointer; color: var(--muted); }

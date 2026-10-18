@@ -160,6 +160,8 @@ async function apiRoute(method, url, body) {
   // Plans de paiement (facture découpée en échéances)
   if (method === 'GET' && R(/^\/api\/plans$/)) return SB.rpc('plans_list', { p: q });
   if (method === 'GET' && R(/^\/api\/plans\/(\d+)$/)) return SB.rpc('plan_get', { p_invoice: +m[1] });
+  if (method === 'POST' && R(/^\/api\/plans\/lot$/)) return SB.rpc('plan_group_set', { p_invoices: body.invoice_ids, p_items: body.items, p_label: body.label || null, p_comment: body.comment || null });
+  if (method === 'DELETE' && R(/^\/api\/plans\/lot\/(\d+)$/)) return SB.rpc('plan_group_delete', { p_plan: +m[1], p_comment: (body && body.comment) || null });
   if (method === 'PUT' && R(/^\/api\/plans\/(\d+)$/)) return SB.rpc('plan_set', { p_invoice: +m[1], p_items: body.items, p_comment: body.comment || null });
   if (method === 'GET' && R(/^\/api\/negoce\/previsions$/)) return SB.rpc('negoce_previsions', { p: q });
   if (method === 'POST' && R(/^\/api\/invoices\/files$/)) return SB.rpc('invoices_files', { p: body });

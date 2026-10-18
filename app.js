@@ -727,15 +727,22 @@ async function tresoBlock(slot, { monday, sem, cur, treso, link }) {
     notes.length ? el('div', { class: 'muted small' }, 'Hors : ' + notes.join(' · ') + '.') : null));
 }
 
-// ------------------------------------------------------------------ plans de paiement (facture découpée en échéances datées)
+// ------------------------------------------------------------------ plans de paiement (une facture ou un lot de factures découpés en échéances datées)
 const PLAN_ST = { reglee: ['réglée', 'b-ok'], a_venir: ['à venir', ''], en_retard: ['en retard', 'b-bad'] };
-function planEditor(inv, existing, onSave) {
-  // inv: {id, reference, supplier_name, amount_ttc, balance, currency} ; existing: échéances actuelles ou []
-  const cur = inv.currency || 'EUR', ttc = inv.amount_ttc;
+// lot = { ids:[...], invoices:[{id, reference, supplier_name, amount_ttc, balance, currency, due_date}], label?, plan_id? }
+function lotFrom(invoices, extra) {
+  const ids = invoices.map(i => i.id), cur = invoices[0].currency || 'EUR';
+  const sups = [...new Set(invoices.map(i => i.supplier_name || 'Fournisseur non identifié'))];
+  return { ids, invoices, currency: cur, amount_ttc: invoices.reduce((t, i) => t + (i.amount_ttc || 0), 0), balance: invoices.reduce((t, i) => t + (i.balance || 0), 0),
+    due_date: invoices.map(i => i.due_date).filter(Boolean).sort()[0] || null, supplier_name: sups.length === 1 ? sups[0] : `${sups.length} fournisseurs`, ...(extra || {}) };
+}
+function planEditor(lot, existing, onSave) {
+  const cur = lot.currency || 'EUR', ttc = lot.amount_ttc, multi = lot.ids.length > 1;
   const rows = [], list = el('div', { class: 'plan-rows' }), total = el('div', { class: 'plan-total' });
   const toCents = v => Math.round(parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) * 100) || 0;
   const refresh = () => { const sum = rows.reduce((t, r) => t + toCents(r.amt.value), 0); const diff = ttc - sum;
     total.replaceChildren(el('span', {}, `Total des échéances : ${money(sum, cur)} / ${money(ttc, cur)}`), el('b', { class: diff === 0 ? 'fc-ok' : 'fc-bad' }, diff === 0 ? ' ✓' : ` écart ${money(diff, cur)}`)); return diff; };
+  const renum = () => list.querySelectorAll('.seq').forEach((e, i) => { e.textContent = (i + 1) + '.'; });
   const addRow = (date, amount) => {
     const r = { date: el('input', { type: 'date', value: date || '' }), amt: el('input', { value: amount ? moneyIn(amount) : '', placeholder: '0,00', class: 'num' }), com: el('input', { placeholder: 'commentaire (facultatif)' }) };
     r.amt.addEventListener('input', refresh);
@@ -743,48 +750,57 @@ function planEditor(inv, existing, onSave) {
       el('button', { type: 'button', class: 'small', title: 'Retirer', onclick: () => { rows.splice(rows.indexOf(r), 1); row.remove(); renum(); refresh(); } }, '×'));
     rows.push(r); list.appendChild(row); renum(); refresh();
   };
-  const renum = () => list.querySelectorAll('.seq').forEach((e, i) => { e.textContent = (i + 1) + '.'; });
-  const split = n => { rows.splice(0); list.replaceChildren(); const base = Math.floor(ttc / n / 100) * 100; const start = new Date((inv.due_date || isoDate(new Date())) + 'T12:00:00');
+  const split = n => { rows.splice(0); list.replaceChildren(); const base = Math.floor(ttc / n / 100) * 100; const start = new Date((lot.due_date || isoDate(new Date())) + 'T12:00:00');
     for (let i = 0; i < n; i++) { const dte = new Date(start); dte.setMonth(dte.getMonth() + i); addRow(isoDate(dte), i === n - 1 ? ttc - base * (n - 1) : base); } };
   if (existing && existing.length) existing.forEach(e => addRow(e.due_date, e.amount)); else split(2);
+  const label = el('input', { value: lot.label || '', placeholder: multi ? 'ex. « ASICS — échéances d\'octobre »' : '' });
   const comment = el('input', { placeholder: 'Motif / accord avec le fournisseur (facultatif, conservé dans l\'historique)' });
   const body = el('div', { class: 'plan-editor' },
-    el('div', { class: 'muted small' }, `${inv.supplier_name || ''} · N° ${inv.reference || '—'} · TTC ${money(ttc, cur)} · reste à régler ${money(inv.balance, cur)}`),
-    el('div', { class: 'row', style: 'margin:8px 0' }, el('span', { class: 'muted small' }, 'Découper en :'), [2, 3, 4, 6].map(n => el('button', { type: 'button', class: 'small', onclick: () => split(n) }, n + ' parts')),
+    el('div', { class: 'muted small' }, multi ? `${lot.ids.length} factures · ${lot.supplier_name} · total TTC ${money(ttc, cur)} · reste à régler ${money(lot.balance, cur)}`
+      : `${lot.supplier_name || ''} · N° ${lot.invoices[0].reference || '—'} · TTC ${money(ttc, cur)} · reste à régler ${money(lot.balance, cur)}`),
+    multi ? el('details', { class: 'small', style: 'margin:6px 0' }, el('summary', {}, 'Factures du lot'), el('ul', { class: 'list-plain' }, lot.invoices.map(i => el('li', {}, `${i.supplier_name || '—'} · N° ${i.reference || '—'} · ${money(i.amount_ttc, cur)}`)))) : null,
+    multi ? el('label', { class: 'f' }, 'Nom du lot', label) : null,
+    el('div', { class: 'row', style: 'margin:8px 0' }, el('span', { class: 'muted small' }, 'Découper en :'), [1, 2, 3, 4, 6].map(n => el('button', { type: 'button', class: 'small', onclick: () => split(n) }, n === 1 ? 'une seule date' : n + ' parts')),
       el('button', { type: 'button', class: 'small', onclick: () => addRow('', 0) }, '+ échéance')),
     el('div', { class: 'plan-head' }, el('span'), el('span', {}, 'Date'), el('span', {}, 'Montant'), el('span', {}, 'Commentaire'), el('span')),
-    list, total, el('label', { class: 'f', style: 'margin-top:10px' }, 'Commentaire', comment));
+    list, total, multi ? el('div', { class: 'muted small', style: 'margin-top:6px' }, 'Chaque échéance est répartie entre les factures du lot au prorata de leur TTC ; les règlements restent enregistrés facture par facture.') : null,
+    el('label', { class: 'f', style: 'margin-top:10px' }, 'Commentaire', comment));
   const save = async close => {
     const items = rows.map(r => ({ due_date: r.date.value, amount: toCents(r.amt.value), comment: r.com.value }));
     if (items.some(i => !i.due_date)) { toast('Chaque échéance doit avoir une date', true); throw new Error('date'); }
-    if (refresh() !== 0) { toast('La somme des échéances doit être égale au TTC', true); throw new Error('sum'); }
-    await act(() => api('PUT', `/api/plans/${inv.id}`, { items, comment: comment.value }), 'Plan de paiement enregistré'); close(); if (onSave) onSave();
+    if (refresh() !== 0) { toast('La somme des échéances doit être égale au total TTC', true); throw new Error('sum'); }
+    if (!multi && items.length < 2) { toast('Un plan sur une seule facture comporte au moins deux échéances (sinon modifiez simplement son échéance)', true); throw new Error('n'); }
+    await act(() => multi ? api('POST', '/api/plans/lot', { invoice_ids: lot.ids, items, label: label.value, comment: comment.value }) : api('PUT', `/api/plans/${lot.ids[0]}`, { items, comment: comment.value }), 'Plan de paiement enregistré');
+    close(); if (onSave) onSave();
   };
   return { body, save };
 }
-function planModal(inv, existing, onSave) {
-  const ed = planEditor(inv, existing, onSave);
+function planModal(lot, existing, onSave) {
+  const ed = planEditor(lot, existing, onSave);
   const actions = [{ label: existing && existing.length ? 'Enregistrer les modifications' : 'Créer le plan', fn: ed.save }];
-  if (existing && existing.length) actions.unshift({ label: 'Supprimer le plan', cls: 'danger', fn: async close => { await act(() => api('PUT', `/api/plans/${inv.id}`, { items: [], comment: 'Plan supprimé' }), 'Plan supprimé'); close(); if (onSave) onSave(); } });
-  modal((existing && existing.length ? 'Modifier le plan de paiement' : 'Nouveau plan de paiement'), ed.body, actions);
+  if (existing && existing.length) actions.unshift({ label: 'Supprimer le plan', cls: 'danger', fn: async close => {
+    await act(() => lot.plan_id ? api('DELETE', `/api/plans/lot/${lot.plan_id}`, { comment: 'Plan supprimé' }) : api('PUT', `/api/plans/${lot.ids[0]}`, { items: [], comment: 'Plan supprimé' }), 'Plan supprimé'); close(); if (onSave) onSave(); } });
+  modal((existing && existing.length ? 'Modifier le plan de paiement' : 'Nouveau plan de paiement') + (lot.ids.length > 1 ? ` — lot de ${lot.ids.length} factures` : ''), ed.body, actions);
 }
 function planInstallments(items, cur) {
   return el('div', { class: 'plan-list' }, items.map(e => el('div', { class: 'plan-item ' + e.statut }, el('span', { class: 'muted small' }, e.seq + '.'), el('span', {}, d(e.due_date)),
-    el('span', { class: 'num' }, money(e.amount, cur)), el('span', { class: 'badge ' + PLAN_ST[e.statut][1] }, PLAN_ST[e.statut][0]), e.comment ? el('span', { class: 'muted small' }, e.comment) : el('span'))));
+    el('span', { class: 'num' }, money(e.amount, cur)), el('span', { class: 'badge ' + PLAN_ST[e.statut][1] }, PLAN_ST[e.statut][0] + (e.statut !== 'reglee' && e.reste != null && e.reste !== e.amount ? ` · reste ${money(e.reste, cur)}` : '')), e.comment ? el('span', { class: 'muted small' }, e.comment) : el('span'))));
 }
 function planHistory(h) {
-  return h.length ? el('div', { class: 'plan-hist' }, h.map(x => el('div', { class: 'small' }, el('b', {}, x.user_name), ` — ${dt(x.ts)} — ${x.action === 'creation' ? 'création' : x.action === 'suppression' ? 'suppression' : 'modification'}`,
-    x.new && x.action !== 'suppression' ? el('span', { class: 'muted' }, ' : ' + planSummary(x.new)) : null))) : el('div', { class: 'muted small' }, 'Aucun historique.');
+  return h.length ? el('div', { class: 'plan-hist' }, h.map(x => el('div', { class: 'small' }, el('b', {}, x.user_name), ` — ${dt(x.ts)} — ${x.action === 'creation' ? 'création' : x.action === 'suppression' ? 'suppression' : x.action === 'lot' ? 'plan par lot' : 'modification'}`,
+    x.new && x.action !== 'suppression' ? el('span', { class: 'muted' }, ' : ' + planSummary(x.new)) : x.new ? el('span', { class: 'muted' }, ' ' + x.new) : null))) : el('div', { class: 'muted small' }, 'Aucun historique.');
 }
 function planSummary(s) { try { const j = JSON.parse(s.replace(/ — .*$/s, '')); const note = (s.match(/ — (.*)$/s) || [])[1]; return j.map(e => `${d(e.due_date)} ${money(e.amount, 'EUR')}`).join(' · ') + (note ? ` (${note})` : ''); } catch (e) { return s; } }
 function planPanel(inv) {
   const box = el('div', { class: 'panel' }, el('h2', {}, 'Plan de paiement'));
   const load = async () => {
     const p = await api('GET', `/api/plans/${inv.id}`).catch(() => null);
-    const items = p ? p.installments : [];
+    const items = p ? p.installments : [], grp = p && p.plan;
+    const lot = grp ? lotFrom(grp.invoices, { label: grp.label, plan_id: grp.id }) : lotFrom([p ? p.invoice : inv]);
     box.replaceChildren(el('h2', {}, 'Plan de paiement'),
+      grp ? el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `Lot « ${grp.label || '#' + grp.id} » : ${grp.invoices.length} factures · part de cette facture ci-dessous · `, el('a', { href: '#/plans' }, 'voir le lot')) : null,
       items.length ? [planInstallments(items, inv.currency), el('h3', {}, 'Historique du plan'), planHistory(p.history)] : el('div', { class: 'muted small' }, 'Aucun plan : la facture est payable en une fois à son échéance.'),
-      canWrite() && inv.amount_ttc != null ? el('div', { style: 'margin-top:8px' }, el('button', { class: 'small', onclick: () => planModal(p ? p.invoice : inv, items, load) }, items.length ? 'Modifier le plan' : 'Créer un plan de paiement')) : null);
+      canWrite() && inv.amount_ttc != null ? el('div', { style: 'margin-top:8px' }, el('button', { class: 'small', onclick: () => planModal(lot, grp ? null : items, load) }, items.length ? (grp ? 'Refaire le plan du lot' : 'Modifier le plan') : 'Créer un plan de paiement')) : null);
   };
   load();
   return box;
@@ -797,7 +813,7 @@ async function viewPlans(view) {
   head.appendChild(sel);
   if (canWrite()) head.appendChild(el('button', { class: 'primary', onclick: () => newPlanModal(() => render()) }, '+ Nouveau plan'));
   view.appendChild(head);
-  view.appendChild(el('div', { class: 'muted page-sub' }, 'Une facture peut être découpée en plusieurs échéances datées (ex. 100 000 € en 2 × 50 000 €). Les prévisions du tableau de bord, de la synthèse et des fiches fournisseurs suivent ces échéances ; chaque création ou modification est historisée avec son auteur.'));
+  view.appendChild(el('div', { class: 'muted page-sub' }, 'Une facture, ou un lot de factures cochées, peut être découpé en échéances datées (ex. 100 000 € en 2 × 50 000 €). Les prévisions du tableau de bord, de la synthèse et des fiches fournisseurs suivent ces échéances ; chaque création ou modification est historisée avec son auteur.'));
   const data = await api('GET', '/api/plans?' + qs(p));
   if (!data.rows.length) { view.appendChild(el('div', { class: 'panel empty' }, 'Aucun plan de paiement' + (p.statut ? ' dans cette catégorie' : '') + '.')); return; }
   const cur = 'EUR';
@@ -806,28 +822,35 @@ async function viewPlans(view) {
     el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Reste à régler sur ces plans'), el('div', { class: 'v' }, money(tot, cur))),
     el('div', { class: 'kpi ' + (late ? 'bad' : 'ok') }, el('div', { class: 'l' }, 'Échéances en retard'), el('div', { class: 'v' }, money(late, cur)))));
   view.appendChild(el('div', { class: 'plan-cards' }, data.rows.map(r => {
-    const next = r.echeances.find(e => e.statut !== 'reglee');
+    const next = r.echeances.find(e => e.statut !== 'reglee'), multi = r.n_factures > 1, one = r.invoices[0];
+    const lot = lotFrom(r.invoices.map(i => ({ ...i, currency: r.currency })), { label: r.label, plan_id: r.plan_id });
     return el('div', { class: 'card plan-card' },
-      el('div', { class: 'plan-card-head' }, supAvatar(r.supplier_name), el('div', { class: 'grow' }, el('div', { class: 't' }, el('a', { href: '#/factures/' + r.id }, r.supplier_name), ' · ', el('span', { class: 'mono' }, 'N° ' + (r.reference || '—'))),
-          el('div', { class: 'm' }, `Facture du ${d(r.invoice_date)} · TTC ${money(r.amount_ttc, r.currency)} · reste ${money(r.balance, r.currency)}` + (r.validation_status === 'a_verifier' ? ' · à vérifier' : ''))),
-        el('div', { class: 'r' }, next ? [el('div', { class: 'small muted' }, next.statut === 'en_retard' ? 'En retard depuis le' : 'Prochaine échéance'), el('div', { class: next.statut === 'en_retard' ? 'fc-bad' : '' }, d(next.due_date) + ' · ' + money(next.amount, r.currency))] : el('span', { class: 'badge b-ok' }, 'soldé'))),
+      el('div', { class: 'plan-card-head' }, supAvatar(r.supplier_name), el('div', { class: 'grow' },
+          el('div', { class: 't' }, multi ? [el('span', {}, r.label || 'Lot sans nom'), el('span', { class: 'badge' }, `${r.n_factures} factures`), ' · ', r.supplier_name] : [el('a', { href: '#/factures/' + one.id }, r.supplier_name), ' · ', el('span', { class: 'mono' }, 'N° ' + (one.reference || '—'))]),
+          el('div', { class: 'm' }, (multi ? '' : `Facture du ${d(one.invoice_date)} · `) + `TTC ${money(r.amount_ttc, r.currency)} · reste ${money(r.balance, r.currency)}` + (r.comment ? ' · ' + r.comment : ''))),
+        el('div', { class: 'r' }, next ? [el('div', { class: 'small muted' }, next.statut === 'en_retard' ? 'En retard depuis le' : 'Prochaine échéance'), el('div', { class: next.statut === 'en_retard' ? 'fc-bad' : '' }, d(next.due_date) + ' · ' + money(next.reste, r.currency))] : el('span', { class: 'badge b-ok' }, 'soldé'))),
       planInstallments(r.echeances, r.currency),
+      multi ? el('details', { class: 'small' }, el('summary', {}, 'Factures du lot'), el('div', { class: 'list compact' }, r.invoices.map(i => el('a', { href: '#/factures/' + i.id },
+        el('span', {}, el('div', { class: 't' }, `${i.supplier_name} · N° ${i.reference || '—'}`), el('div', { class: 'm' }, `du ${d(i.invoice_date)}` + (i.validation_status === 'a_verifier' ? ' · à vérifier' : ''))), el('span', { class: 'r' }, money(i.balance, r.currency), el('div', { class: 'm' }, 'sur ' + money(i.amount_ttc, r.currency))))))) : null,
       el('div', { class: 'plan-card-foot' }, el('span', { class: 'muted small' }, r.premier ? `Créé par ${r.premier.user_name} le ${dt(r.premier.ts)}` : '', r.dernier && r.premier && r.dernier.ts !== r.premier.ts ? ` · modifié par ${r.dernier.user_name} le ${dt(r.dernier.ts)}` : ''),
-        el('span', { class: 'grow' }), canWrite() ? el('button', { class: 'small', onclick: () => planModal({ id: r.id, reference: r.reference, supplier_name: r.supplier_name, amount_ttc: r.amount_ttc, balance: r.balance, currency: r.currency, due_date: r.prochaine }, r.echeances, () => render()) }, 'Modifier') : null,
-        el('a', { class: 'btn small', href: '#/factures/' + r.id }, 'Voir la facture')));
+        el('span', { class: 'grow' }), canWrite() ? el('button', { class: 'small', onclick: () => planModal(lot, multi ? r.echeances.map(e => ({ due_date: e.due_date, amount: e.amount })) : r.echeances, () => render()) }, 'Modifier') : null,
+        multi ? null : el('a', { class: 'btn small', href: '#/factures/' + one.id }, 'Voir la facture')));
   })));
 }
 function newPlanModal(onSave) {
-  // 1. choisir la facture (recherche fournisseur / numéro parmi les factures ouvertes), 2. découper
-  const q = el('input', { placeholder: 'Fournisseur, numéro de facture ou #id…' }), res = el('div', { class: 'plan-pick' });
+  // 1. cocher une ou plusieurs factures ouvertes (recherche fournisseur / numéro), 2. découper
+  const q = el('input', { placeholder: 'Fournisseur, numéro de facture ou #id…' }), res = el('div', { class: 'plan-pick' }), chosen = new Map(), sum = el('div', { class: 'plan-total' });
   let timer;
-  const search = async () => { const v = q.value.trim(); if (v.length < 2) { res.replaceChildren(); return; }
-    const data = await api('GET', '/api/invoices?' + qs({ search: v, doc_type: 'facture', open: '1', per_page: 12, sort: 'due_date', dir: 'asc' })).catch(() => ({ rows: [] }));
-    res.replaceChildren(data.rows.length ? data.rows.map(r => el('button', { type: 'button', class: 'pick', onclick: () => { close(); planModal({ id: r.id, reference: r.reference, supplier_name: r.supplier_name, amount_ttc: r.amount_ttc, balance: r.balance, currency: r.currency, due_date: r.due_date }, [], onSave); } },
-      supAvatar(r.supplier_name, 'sm'), el('span', { class: 'grow' }, el('div', { class: 't' }, r.supplier_name || 'Fournisseur non identifié'), el('div', { class: 'm' }, `N° ${r.reference || '—'} · ${d(r.invoice_date)} · échéance ${d(r.due_date)}`)),
-      el('span', { class: 'num' }, money(r.balance, r.currency)))) : el('div', { class: 'muted small' }, 'Aucune facture ouverte ne correspond.')); };
+  const upd = () => { const arr = [...chosen.values()]; sum.replaceChildren(arr.length ? [el('b', {}, `${arr.length} facture(s) cochée(s)`), ` · total TTC ${money(arr.reduce((t, r) => t + (r.amount_ttc || 0), 0), 'EUR')}`] : el('span', { class: 'muted' }, 'Cochez une ou plusieurs factures.')); next.disabled = !arr.length; };
+  const line = r => { const cb = el('input', { type: 'checkbox', checked: chosen.has(r.id), onchange: () => { cb.checked ? chosen.set(r.id, r) : chosen.delete(r.id); upd(); } });
+    return el('label', { class: 'pick' }, cb, supAvatar(r.supplier_name, 'sm'), el('span', { class: 'grow' }, el('div', { class: 't' }, r.supplier_name || 'Fournisseur non identifié'), el('div', { class: 'm' }, `N° ${r.reference || '—'} · ${d(r.invoice_date)} · échéance ${d(r.due_date)}` + (r.due_rule && r.due_rule.startsWith('Plan') ? ' · déjà planifiée' : ''))), el('span', { class: 'num' }, money(r.balance, r.currency))); };
+  const search = async () => { const v = q.value.trim(); if (v.length < 2) { res.replaceChildren(...[...chosen.values()].map(line)); return; }
+    const data = await api('GET', '/api/invoices?' + qs({ search: v, doc_type: 'facture', open: '1', per_page: 40, sort: 'due_date', dir: 'asc' })).catch(() => ({ rows: [] }));
+    res.replaceChildren(data.rows.length ? data.rows.map(line) : el('div', { class: 'muted small' }, 'Aucune facture ouverte ne correspond.')); };
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
-  const close = modal('Nouveau plan de paiement — choisir la facture', el('div', {}, el('label', { class: 'f' }, 'Facture à découper', q), res), []);
+  const next = el('button', { class: 'primary', disabled: true, onclick: () => { const arr = [...chosen.values()]; close(); planModal(lotFrom(arr), [], onSave); } }, 'Continuer →');
+  upd();
+  const close = modal('Nouveau plan de paiement — choisir les factures', el('div', {}, el('label', { class: 'f' }, 'Rechercher parmi les factures ouvertes', q), res, el('div', { class: 'row', style: 'margin-top:10px;align-items:center' }, sum, el('span', { class: 'grow' }), next)), []);
 }
 
 // ------------------------------------------------------------------ filtres
@@ -885,10 +908,11 @@ async function viewInvoices(view, forced, title) {
     if (r.errors.length) modal('Fichiers introuvables', el('ul', { class: 'list-plain' }, r.errors.map(e => el('li', {}, e))));
   };
   const pdfSelBtn = el('button', { disabled: true, onclick: () => pdfRun({ ids: [...selected] }) }, 'PDF de la sélection');
+  const planSelBtn = canWrite() ? el('button', { disabled: true, onclick: () => { const rows = data.rows.filter(r => selected.has(r.id) && r.doc_type === 'facture' && r.amount_ttc != null); if (!rows.length) return toast('Cochez des factures avec un montant', true); planModal(lotFrom(rows), [], () => render()); } }, 'Plan de paiement') : null;
   const pdfAllBtn = data.total && data.total <= 2000 ? el('button', { onclick: () => confirmBox('Télécharger les PDF', `Assembler les ${data.total} facture(s) de ce filtre dans un ZIP ?`, 'Télécharger', () => pdfRun(exportP), 'primary') }, `PDF du filtre (${data.total})`) : null;
   const toolbar = el('div', { class: 'row', style: 'margin-bottom:8px' },
     el('div', { class: 'grow muted' }, `${data.total} document(s)`),
-    canWrite() ? bulkBtn : null, pdfProgress, pdfSelBtn, pdfAllBtn,
+    canWrite() ? bulkBtn : null, planSelBtn, pdfProgress, pdfSelBtn, pdfAllBtn,
     el('button', { onclick: () => act(() => exportInvoices(exportP, 'csv')).then(n => toast(`${n} ligne(s) exportée(s)`)) }, 'Export CSV'),
     el('button', { onclick: () => act(() => exportInvoices(exportP, 'xlsx')).then(n => toast(`${n} ligne(s) exportée(s)`)) }, 'Export Excel'));
   const cols = [
@@ -904,7 +928,7 @@ async function viewInvoices(view, forced, title) {
     return el('th', { class: 'sort' + (num ? ' num' : ''), onclick: () => go({ ...p, sort: key, dir: p.sort === key && p.dir === 'desc' ? 'asc' : 'desc', page: 1 }) }, label + arrow);
   }));
   const rows = data.rows.map(r => {
-    const cb = el('input', { type: 'checkbox', class: 'rowsel', onclick: e => e.stopPropagation(), onchange: e => { e.target.checked ? selected.add(r.id) : selected.delete(r.id); bulkBtn.disabled = !selected.size; pdfSelBtn.disabled = !selected.size; pdfSelBtn.textContent = selected.size ? `PDF de la sélection (${selected.size})` : 'PDF de la sélection'; } });
+    const cb = el('input', { type: 'checkbox', class: 'rowsel', onclick: e => e.stopPropagation(), onchange: e => { e.target.checked ? selected.add(r.id) : selected.delete(r.id); bulkBtn.disabled = !selected.size; pdfSelBtn.disabled = !selected.size; if (planSelBtn) { planSelBtn.disabled = !selected.size; planSelBtn.textContent = selected.size ? `Plan de paiement (${selected.size})` : 'Plan de paiement'; } pdfSelBtn.textContent = selected.size ? `PDF de la sélection (${selected.size})` : 'PDF de la sélection'; } });
     const nb = r.anomalies.filter(a => a.niveau === 'bloquant').length, na = r.anomalies.filter(a => a.niveau === 'alerte' && !r.acknowledged.includes(a.code)).length;
     return el('tr', { class: 'click', onclick: () => { S.reviewQueue = data.rows.map(x => x.id); location.hash = '#/factures/' + r.id; } },
       el('td', {}, cb),
