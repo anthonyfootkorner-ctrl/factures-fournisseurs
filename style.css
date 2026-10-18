@@ -450,3 +450,11 @@ a.v:hover { color: var(--brand-2); }
 .todo-item .m { color: var(--muted); font-size: 11px; } .todo-item:hover span { color: var(--brand-2); }
 @media (max-width: 1150px) { .dash-kpis { grid-template-columns: 1fr 1fr; } .dash-kpis .card.brand { grid-column: 1 / -1; } }
 @media (max-width: 700px) { .dash-kpis { grid-template-columns: 1fr; } .dash-lists { grid-template-columns: 1fr; } .card { padding: 16px; } .card .v { font-size: 26px; } }
+/* trésorerie prévisionnelle */
+.treso-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 6px 0 12px; }
+.tk { background: var(--panel2); border: 1px solid var(--line2); border-radius: 12px; padding: 10px 12px; }
+.tk-l { color: var(--muted); font-size: 11px; } .tk-v { font-size: 17px; font-weight: 600; color: #fff; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.treso-chart .bar-ok { fill: #3ecf8e; } .treso-chart .cumul { fill: none; stroke: #fff; stroke-width: 2; stroke-dasharray: 4 3; }
+.treso-chart .cumul-pt { fill: #fff; } .treso-chart .cumul-pt.neg { fill: var(--bad); } .treso-chart .cumul-lab { fill: var(--muted); font-size: 10px; }
+.treso-table { margin-top: 10px; font-size: 12px; } .treso-table td, .treso-table th { padding: 6px 8px; }
+@media (max-width: 700px) { .treso-table th:nth-child(2), .treso-table td:nth-child(2), .treso-table th:nth-child(3), .treso-table td:nth-child(3) { display: none; } }

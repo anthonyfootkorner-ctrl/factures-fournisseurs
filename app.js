@@ -616,6 +616,11 @@ async function viewDashboard(view) {
   showTab('mois');
   left.appendChild(el('div', { class: 'card chart-card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Vue d\'ensemble'), tabBar), chartBox, chartNote));
 
+  // --- 2 bis. trésorerie prévisionnelle (entrées web + négoce − sorties fournisseurs), chargée sans bloquer le reste
+  const tresoSlot = el('div', {});
+  left.appendChild(tresoSlot);
+  tresoBlock(tresoSlot, { monday, sem, cur, treso: treso[cur], link }).catch(e => tresoSlot.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'muted' }, 'Trésorerie prévisionnelle indisponible : ' + e.message))));
+
   // --- 3. listes : prochaines échéances, fournisseurs à régler
   const proch = ech.prochaines || [], tops = ech.top_fournisseurs || [];
   const listEch = el('div', { class: 'list' }, proch.length ? proch.map(f => el('a', { href: '#/factures/' + f.id },
@@ -652,6 +657,65 @@ async function viewDashboard(view) {
   alertItems.forEach(a => items.push(el('a', { class: 'todo-item ' + (a[2] === 'b-bad' ? 'bad' : 'warn'), href: link({ anomaly: a[0], validation: 'a_verifier', open: '' }) }, el('b', {}, al[a[0]]), el('span', {}, a[1]))));
   todo.appendChild(el('div', { class: 'card todo' }, el('div', { class: 'card-head' }, el('h2', {}, 'À traiter')),
     items.length ? items : el('div', { class: 'muted small' }, 'Rien en attente : tout est à jour.')));
+}
+
+// ------------------------------------------------------------------ trésorerie prévisionnelle (tableau de bord)
+async function tresoBlock(slot, { monday, sem, cur, treso, link }) {
+  const N = 8;
+  const addDays = (iso, n) => { const x = new Date(iso + 'T12:00:00'); x.setDate(x.getDate() + n); return isoDate(x); };
+  const end = addDays(monday, N * 7 - 1);
+  const [web, neg] = await Promise.all([
+    api('GET', '/api/psp/forecast?' + qs({ from: monday, to: end })).catch(() => null),
+    api('GET', '/api/negoce/previsions?' + qs({})).catch(() => null),
+  ]);
+  const weeks = Array.from({ length: N }, (_, i) => {
+    const ws = addDays(monday, i * 7), we = addDays(ws, 6);
+    const s = sem.find(x => x.semaine === ws) || { montant: 0 };
+    const w = (web && web.days ? web.days : []).filter(d => d.date >= ws && d.date <= we).reduce((t, d) => t + (d.total_prevu || 0), 0);
+    const n = neg && neg.semaines ? (neg.semaines.find(x => x.semaine === ws) || { montant: 0 }).montant : 0;
+    return { ws, we, web: w, negoce: n, sorties: s.montant || 0, delta: w + n - (s.montant || 0) };
+  });
+  let cumul = treso ? treso.solde : 0;
+  weeks.forEach(w => { cumul += w.delta; w.cumul = cumul; });
+  const tot = k => weeks.reduce((t, w) => t + w[k], 0);
+  // graphique : barres entrées (vert) / sorties (orange) par semaine + ligne du cumul
+  const W = 720, H = 220, padL = 52, padR = 52, padT = 16, padB = 30, bw = (W - padL - padR) / N;
+  const max = Math.max(1, ...weeks.map(w => Math.max(w.web + w.negoce, w.sorties)));
+  const cmin = Math.min(0, ...weeks.map(w => w.cumul)), cmax = Math.max(1, ...weeks.map(w => w.cumul), treso ? treso.solde : 0);
+  const y = v => padT + (H - padT - padB) * (1 - v / max), yc = v => padT + (H - padT - padB) * (1 - (v - cmin) / (cmax - cmin || 1));
+  const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart treso-chart', role: 'img' });
+  for (let t = 0; t <= 4; t++) { const yy = padT + (H - padT - padB) * (1 - t / 4); g.appendChild(svg('line', { x1: padL, x2: W - padR, y1: yy, y2: yy, class: 'grid' })); g.appendChild(svg('text', { x: padL - 6, y: yy + 4, 'text-anchor': 'end' }, shortMoney(max * t / 4))); }
+  weeks.forEach((w, i) => {
+    const x0 = padL + i * bw;
+    const r1 = svg('rect', { x: x0 + bw * 0.12, y: y(w.web + w.negoce), width: bw * 0.34, height: H - padB - y(w.web + w.negoce), class: 'bar-ok' }); r1.appendChild(svg('title', {}, `Entrées semaine du ${d(w.ws)} : ${money(w.web + w.negoce, cur)} (web ${money(w.web, cur)}, négoce ${money(w.negoce, cur)})`));
+    const r2 = svg('rect', { x: x0 + bw * 0.52, y: y(w.sorties), width: bw * 0.34, height: H - padB - y(w.sorties), class: 'bar' }); r2.appendChild(svg('title', {}, `Sorties fournisseurs : ${money(w.sorties, cur)}`));
+    g.append(r1, r2, svg('text', { x: x0 + bw / 2, y: H - padB + 14, 'text-anchor': 'middle' }, d(w.ws).slice(0, 5)));
+  });
+  const pts = weeks.map((w, i) => `${padL + i * bw + bw / 2},${yc(w.cumul)}`).join(' ');
+  g.appendChild(svg('polyline', { points: pts, class: 'cumul' }));
+  weeks.forEach((w, i) => { const c = svg('circle', { cx: padL + i * bw + bw / 2, cy: yc(w.cumul), r: 4, class: 'cumul-pt' + (w.cumul < 0 ? ' neg' : '') }); c.appendChild(svg('title', {}, `Trésorerie projetée fin de semaine : ${money(w.cumul, cur)}`)); g.appendChild(c); });
+  for (let t = 0; t <= 2; t++) { const v = cmin + (cmax - cmin) * t / 2; g.appendChild(svg('text', { x: W - padR + 6, y: yc(v) + 4, class: 'cumul-lab' }, shortMoney(v))); }
+  const notes = [];
+  if (!web) notes.push('prévision web indisponible');
+  if (!neg) notes.push('prévision négoce indisponible');
+  else if (neg.retard && neg.retard.total) notes.push(`retards clients non comptés : ${money(neg.retard.total, cur)} (encaissements négoce pas encore rapprochés : chiffres bruts)`);
+  const retardF = (sem.find(x => x.semaine === 'retard') || {}).montant;
+  if (retardF) notes.push(`retards fournisseurs non comptés : ${money(retardF, cur)}`);
+  const fin4 = weeks[3].cumul, fin8 = weeks[N - 1].cumul;
+  const kpi = (l, v, cls) => el('div', { class: 'tk' }, el('div', { class: 'tk-l' }, l), el('div', { class: 'tk-v ' + (cls || '') }, money(v, cur)));
+  slot.replaceChildren(el('div', { class: 'card treso' },
+    el('div', { class: 'card-head' }, el('h2', {}, `Trésorerie prévisionnelle · ${N} semaines`),
+      el('div', { class: 'legend' }, el('span', {}, el('i', { style: 'background:#3ecf8e' }), 'Entrées (web + négoce)'), el('span', {}, el('i', { style: 'background:#ff6b1a' }), 'Sorties fournisseurs'), el('span', {}, el('i', { style: 'background:#fff' }), 'Trésorerie projetée'))),
+    el('div', { class: 'treso-kpis' },
+      kpi(treso ? `Trésorerie connue au ${d(treso.date_max)}` : 'Trésorerie connue', treso ? treso.solde : 0, treso && treso.solde < 0 ? 'fc-bad' : ''),
+      kpi(`Entrées ${N} sem.`, tot('web') + tot('negoce'), 'fc-ok'), kpi(`Sorties ${N} sem.`, tot('sorties'), 'fc-warn'),
+      kpi('Delta', tot('web') + tot('negoce') - tot('sorties'), tot('web') + tot('negoce') - tot('sorties') < 0 ? 'fc-bad' : 'fc-ok'),
+      kpi('Projeté à 4 sem.', fin4, fin4 < 0 ? 'fc-bad' : ''), kpi(`Projeté à ${N} sem.`, fin8, fin8 < 0 ? 'fc-bad' : '')),
+    g,
+    el('table', { class: 'treso-table' }, el('thead', {}, el('tr', {}, el('th', {}, 'Semaine'), el('th', { class: 'num' }, 'Web'), el('th', { class: 'num' }, 'Négoce'), el('th', { class: 'num' }, 'Fournisseurs'), el('th', { class: 'num' }, 'Delta'), el('th', { class: 'num' }, 'Trésorerie'))),
+      el('tbody', {}, weeks.map(w => el('tr', {}, el('td', {}, `${d(w.ws).slice(0, 5)} → ${d(w.we).slice(0, 5)}`), el('td', { class: 'num' }, money(w.web, cur)), el('td', { class: 'num' }, money(w.negoce, cur)),
+        el('td', { class: 'num' }, el('a', { href: link({ due_from: w.ws, due_to: w.we }) }, money(w.sorties, cur))), el('td', { class: 'num ' + (w.delta < 0 ? 'fc-bad' : 'fc-ok') }, money(w.delta, cur)), el('td', { class: 'num ' + (w.cumul < 0 ? 'fc-bad' : '') }, money(w.cumul, cur)))))),
+    notes.length ? el('div', { class: 'muted small' }, 'Hors : ' + notes.join(' · ') + '.') : null));
 }
 
 // ------------------------------------------------------------------ filtres
