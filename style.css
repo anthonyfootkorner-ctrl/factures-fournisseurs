@@ -468,3 +468,22 @@ a.v:hover { color: var(--brand-2); }
 .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; } .sup-lists .card { margin-bottom: 18px; }
 .list.compact > a { padding: 7px 0; grid-template-columns: minmax(0, 1fr) auto; }
 @media (max-width: 1100px) { .grid3 { grid-template-columns: 1fr; } }
+/* plans de paiement */
+.plan-editor .plan-head, .plan-row { display: grid; grid-template-columns: 24px 150px 130px 1fr 32px; gap: 8px; align-items: center; }
+.plan-head { color: var(--muted); font-size: 11px; margin-bottom: 4px; } .plan-row { margin-bottom: 6px; } .plan-row input.num { text-align: right; }
+.plan-total { margin-top: 8px; font-size: 13px; }
+.plan-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.plan-item { display: grid; grid-template-columns: 24px 100px 130px auto 1fr; gap: 10px; align-items: center; font-size: 13px; padding: 5px 8px; border-radius: 8px; background: var(--panel2); }
+.plan-item.reglee { opacity: .6; } .plan-item.en_retard { background: var(--bad-soft); }
+.plan-hist { display: flex; flex-direction: column; gap: 4px; }
+.plan-cards { display: flex; flex-direction: column; gap: 14px; }
+.plan-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; } .plan-card-head .t { font-size: 14px; font-weight: 500; } .plan-card-head .m { color: var(--muted); font-size: 12px; }
+.plan-card-head .r { text-align: right; font-variant-numeric: tabular-nums; }
+.plan-card-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.plan-pick { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 50vh; overflow: auto; }
+.plan-pick .pick { display: flex; align-items: center; gap: 10px; text-align: left; background: var(--panel2); border: 1px solid var(--line2); border-radius: 10px; padding: 8px 10px; color: var(--ink); cursor: pointer; width: 100%; }
+.plan-pick .pick:hover { border-color: var(--brand); } .plan-pick .t { font-size: 13px; } .plan-pick .m { color: var(--muted); font-size: 11px; }
+@media (max-width: 700px) { .plan-editor .plan-head { display: none; } .plan-row { grid-template-columns: 20px 1fr 1fr 32px; } .plan-row input:nth-child(4) { grid-column: 2 / -1; } .plan-item { grid-template-columns: 20px 1fr auto auto; } .plan-item > :last-child { display: none; } }
+.treso-chart .bar-web { fill: #3ecf8e; } .treso-chart .bar-negoce { fill: #2bb3c9; } .treso-chart .bar-fixes { fill: #6fa8ff; }
+.tk-s { color: var(--muted); font-size: 10px; margin-top: 2px; }
+@media (max-width: 900px) { .treso-table th:nth-child(4), .treso-table td:nth-child(4), .treso-table th:nth-child(5), .treso-table td:nth-child(5), .treso-table th:nth-child(6), .treso-table td:nth-child(6) { display: none; } }

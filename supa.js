@@ -157,6 +157,10 @@ async function apiRoute(method, url, body) {
   if (method === 'GET' && R(/^\/api\/dashboard$/)) return SB.rpc('dashboard', { p: q });
   if (method === 'GET' && R(/^\/api\/synthese$/)) return SB.rpc('synthese', { p: q });
   if (method === 'GET' && R(/^\/api\/echeances$/)) return SB.rpc('echeances_par_mois', { p: q });
+  // Plans de paiement (facture découpée en échéances)
+  if (method === 'GET' && R(/^\/api\/plans$/)) return SB.rpc('plans_list', { p: q });
+  if (method === 'GET' && R(/^\/api\/plans\/(\d+)$/)) return SB.rpc('plan_get', { p_invoice: +m[1] });
+  if (method === 'PUT' && R(/^\/api\/plans\/(\d+)$/)) return SB.rpc('plan_set', { p_invoice: +m[1], p_items: body.items, p_comment: body.comment || null });
   if (method === 'GET' && R(/^\/api\/negoce\/previsions$/)) return SB.rpc('negoce_previsions', { p: q });
   if (method === 'POST' && R(/^\/api\/invoices\/files$/)) return SB.rpc('invoices_files', { p: body });
   if (method === 'GET' && R(/^\/api\/pennylane$/)) return SB.rpc('pennylane_overview', {});

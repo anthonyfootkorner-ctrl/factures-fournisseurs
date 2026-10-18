@@ -126,7 +126,7 @@ function changeOwnPassword() {
 // ------------------------------------------------------------------ squelette & routage
 const NAV = [
   ['#/', 'Tableau de bord'], ['#/synthese', 'Synthèse'], ['#/factures', 'Factures'], ['#/a-verifier', 'À vérifier'],
-  ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/encaissements', 'Suivi encaissements web'], ['#/negoce', 'Négoce'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
+  ['#/fournisseurs', 'Fournisseurs'], ['#/banque', 'Banque'], ['#/plans', 'Plans de paiement'], ['#/encaissements', 'Suivi encaissements web'], ['#/negoce', 'Négoce'], ['#/imports', 'Imports'], ['#/parametres', 'Paramètres'],
 ];
 let reviewCount = null;
 const ICONS = {
@@ -136,6 +136,7 @@ const ICONS = {
   '#/a-verifier': 'M9 11l3 3 7-7M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
   '#/fournisseurs': 'M3 21V8l9-5 9 5v13M9 21v-6h6v6M3 21h18',
   '#/banque': 'M3 10l9-6 9 6M5 10v8M10 10v8M14 10v8M19 10v8M3 21h18',
+  '#/plans': 'M8 2v4M16 2v4M3 9h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM8 14h3M13 14h3M8 18h3',
   '#/encaissements': 'M2 7h20v12H2zM2 11h20M6 15h4',
   '#/negoce': 'M3 17l6-6 4 4 8-8M14 7h7v7',
   '#/imports': 'M12 3v12M7 10l5 5 5-5M4 21h16',
@@ -238,6 +239,7 @@ async function render() {
     else if (parts[0] === 'imports') await viewImports(view);
     else if (parts[0] === 'parametres') await viewSettings(view);
     else if (parts[0] === 'banque') await viewBank(view);
+    else if (parts[0] === 'plans') await viewPlans(view);
     else if (parts[0] === 'synthese') await viewSynthese(view);
     else if (parts[0] === 'negoce') await NEGOCE.render(view, parts);  // encaissements clients négoce (web/negoce.js)
     else if (parts[0] === 'encaissements') await viewEncaissements(view);
@@ -670,26 +672,29 @@ async function tresoBlock(slot, { monday, sem, cur, treso, link }) {
   ]);
   const weeks = Array.from({ length: N }, (_, i) => {
     const ws = addDays(monday, i * 7), we = addDays(ws, 6);
-    const s = sem.find(x => x.semaine === ws) || { montant: 0 };
+    const s = sem.find(x => x.semaine === ws) || { montant: 0, familles: {} };
+    const fam = s.familles || {};
     const w = (web && web.days ? web.days : []).filter(d => d.date >= ws && d.date <= we).reduce((t, d) => t + (d.total_prevu || 0), 0);
     const n = neg && neg.semaines ? (neg.semaines.find(x => x.semaine === ws) || { montant: 0 }).montant : 0;
-    return { ws, we, web: w, negoce: n, sorties: s.montant || 0, delta: w + n - (s.montant || 0) };
+    const textile = fam.textile || 0, fixes = fam.charges_fixes || 0, autres = Math.max(0, (s.montant || 0) - textile - fixes);
+    return { ws, we, web: w, negoce: n, textile, fixes, autres, sorties: s.montant || 0, delta: w + n - (s.montant || 0) };
   });
   let cumul = treso ? treso.solde : 0;
   weeks.forEach(w => { cumul += w.delta; w.cumul = cumul; });
   const tot = k => weeks.reduce((t, w) => t + w[k], 0);
-  // graphique : barres entrées (vert) / sorties (orange) par semaine + ligne du cumul
-  const W = 720, H = 220, padL = 52, padR = 52, padT = 16, padB = 30, bw = (W - padL - padR) / N;
+  // graphique : barres empilées entrées (web + négoce) / sorties (textile + charges fixes + autres) par semaine + ligne du cumul
+  const W = 720, H = 230, padL = 52, padR = 52, padT = 16, padB = 30, bw = (W - padL - padR) / N;
   const max = Math.max(1, ...weeks.map(w => Math.max(w.web + w.negoce, w.sorties)));
   const cmin = Math.min(0, ...weeks.map(w => w.cumul)), cmax = Math.max(1, ...weeks.map(w => w.cumul), treso ? treso.solde : 0);
   const y = v => padT + (H - padT - padB) * (1 - v / max), yc = v => padT + (H - padT - padB) * (1 - (v - cmin) / (cmax - cmin || 1));
   const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart treso-chart', role: 'img' });
   for (let t = 0; t <= 4; t++) { const yy = padT + (H - padT - padB) * (1 - t / 4); g.appendChild(svg('line', { x1: padL, x2: W - padR, y1: yy, y2: yy, class: 'grid' })); g.appendChild(svg('text', { x: padL - 6, y: yy + 4, 'text-anchor': 'end' }, shortMoney(max * t / 4))); }
+  const stack = (x0, parts) => { let base = 0; parts.forEach(([v, cls, title]) => { if (v <= 0) return; const r = svg('rect', { x: x0, y: y(base + v), width: bw * 0.34, height: y(base) - y(base + v), class: cls }); r.appendChild(svg('title', {}, title)); g.appendChild(r); base += v; }); };
   weeks.forEach((w, i) => {
-    const x0 = padL + i * bw;
-    const r1 = svg('rect', { x: x0 + bw * 0.12, y: y(w.web + w.negoce), width: bw * 0.34, height: H - padB - y(w.web + w.negoce), class: 'bar-ok' }); r1.appendChild(svg('title', {}, `Entrées semaine du ${d(w.ws)} : ${money(w.web + w.negoce, cur)} (web ${money(w.web, cur)}, négoce ${money(w.negoce, cur)})`));
-    const r2 = svg('rect', { x: x0 + bw * 0.52, y: y(w.sorties), width: bw * 0.34, height: H - padB - y(w.sorties), class: 'bar' }); r2.appendChild(svg('title', {}, `Sorties fournisseurs : ${money(w.sorties, cur)}`));
-    g.append(r1, r2, svg('text', { x: x0 + bw / 2, y: H - padB + 14, 'text-anchor': 'middle' }, d(w.ws).slice(0, 5)));
+    const x0 = padL + i * bw, lab = `semaine du ${d(w.ws)}`;
+    stack(x0 + bw * 0.12, [[w.web, 'bar-web', `Web ${lab} : ${money(w.web, cur)}`], [w.negoce, 'bar-negoce', `Négoce ${lab} : ${money(w.negoce, cur)}`]]);
+    stack(x0 + bw * 0.52, [[w.textile, 'bar', `Textile ${lab} : ${money(w.textile, cur)}`], [w.fixes, 'bar-fixes', `Charges fixes ${lab} : ${money(w.fixes, cur)}`], [w.autres, 'bar-grey', `Autres fournisseurs ${lab} : ${money(w.autres, cur)}`]]);
+    g.appendChild(svg('text', { x: x0 + bw / 2, y: H - padB + 14, 'text-anchor': 'middle' }, d(w.ws).slice(0, 5)));
   });
   const pts = weeks.map((w, i) => `${padL + i * bw + bw / 2},${yc(w.cumul)}`).join(' ');
   g.appendChild(svg('polyline', { points: pts, class: 'cumul' }));
@@ -701,21 +706,128 @@ async function tresoBlock(slot, { monday, sem, cur, treso, link }) {
   else if (neg.retard && neg.retard.total) notes.push(`retards clients non comptés : ${money(neg.retard.total, cur)} (encaissements négoce pas encore rapprochés : chiffres bruts)`);
   const retardF = (sem.find(x => x.semaine === 'retard') || {}).montant;
   if (retardF) notes.push(`retards fournisseurs non comptés : ${money(retardF, cur)}`);
-  const fin4 = weeks[3].cumul, fin8 = weeks[N - 1].cumul;
-  const kpi = (l, v, cls) => el('div', { class: 'tk' }, el('div', { class: 'tk-l' }, l), el('div', { class: 'tk-v ' + (cls || '') }, money(v, cur)));
+  const fin4 = weeks[3].cumul, fin8 = weeks[N - 1].cumul, entrees = tot('web') + tot('negoce'), sorties = tot('sorties');
+  const kpi = (l, v, cls, sub) => el('div', { class: 'tk' }, el('div', { class: 'tk-l' }, l), el('div', { class: 'tk-v ' + (cls || '') }, money(v, cur)), sub ? el('div', { class: 'tk-s' }, sub) : null);
+  const legend = el('div', { class: 'legend' }, el('span', {}, el('i', { style: 'background:#3ecf8e' }), 'Web'), el('span', {}, el('i', { style: 'background:#2bb3c9' }), 'Négoce'),
+    el('span', {}, el('i', { style: 'background:#ff6b1a' }), 'Textile'), el('span', {}, el('i', { style: 'background:#6fa8ff' }), 'Charges fixes'), el('span', {}, el('i', { style: 'background:#5b6068' }), 'Autres'), el('span', {}, el('i', { style: 'background:#fff' }), 'Trésorerie projetée'));
+  const link2 = (w, fam) => link({ due_from: w.ws, due_to: w.we, famille: fam });
   slot.replaceChildren(el('div', { class: 'card treso' },
-    el('div', { class: 'card-head' }, el('h2', {}, `Trésorerie prévisionnelle · ${N} semaines`),
-      el('div', { class: 'legend' }, el('span', {}, el('i', { style: 'background:#3ecf8e' }), 'Entrées (web + négoce)'), el('span', {}, el('i', { style: 'background:#ff6b1a' }), 'Sorties fournisseurs'), el('span', {}, el('i', { style: 'background:#fff' }), 'Trésorerie projetée'))),
+    el('div', { class: 'card-head' }, el('h2', {}, `Trésorerie prévisionnelle · ${N} semaines`), legend),
     el('div', { class: 'treso-kpis' },
       kpi(treso ? `Trésorerie connue au ${d(treso.date_max)}` : 'Trésorerie connue', treso ? treso.solde : 0, treso && treso.solde < 0 ? 'fc-bad' : ''),
-      kpi(`Entrées ${N} sem.`, tot('web') + tot('negoce'), 'fc-ok'), kpi(`Sorties ${N} sem.`, tot('sorties'), 'fc-warn'),
-      kpi('Delta', tot('web') + tot('negoce') - tot('sorties'), tot('web') + tot('negoce') - tot('sorties') < 0 ? 'fc-bad' : 'fc-ok'),
+      kpi(`Entrées ${N} sem.`, entrees, 'fc-ok', `web ${shortMoney(tot('web'))} · négoce ${shortMoney(tot('negoce'))}`),
+      kpi(`Sorties ${N} sem.`, sorties, 'fc-warn', `textile ${shortMoney(tot('textile'))} · fixes ${shortMoney(tot('fixes'))} · autres ${shortMoney(tot('autres'))}`),
+      kpi('Delta', entrees - sorties, entrees - sorties < 0 ? 'fc-bad' : 'fc-ok'),
       kpi('Projeté à 4 sem.', fin4, fin4 < 0 ? 'fc-bad' : ''), kpi(`Projeté à ${N} sem.`, fin8, fin8 < 0 ? 'fc-bad' : '')),
     g,
-    el('table', { class: 'treso-table' }, el('thead', {}, el('tr', {}, el('th', {}, 'Semaine'), el('th', { class: 'num' }, 'Web'), el('th', { class: 'num' }, 'Négoce'), el('th', { class: 'num' }, 'Fournisseurs'), el('th', { class: 'num' }, 'Delta'), el('th', { class: 'num' }, 'Trésorerie'))),
+    el('table', { class: 'treso-table' }, el('thead', {}, el('tr', {}, el('th', {}, 'Semaine'), el('th', { class: 'num' }, 'Web'), el('th', { class: 'num' }, 'Négoce'), el('th', { class: 'num' }, 'Textile'), el('th', { class: 'num' }, 'Charges fixes'), el('th', { class: 'num' }, 'Autres'), el('th', { class: 'num' }, 'Delta'), el('th', { class: 'num' }, 'Trésorerie'))),
       el('tbody', {}, weeks.map(w => el('tr', {}, el('td', {}, `${d(w.ws).slice(0, 5)} → ${d(w.we).slice(0, 5)}`), el('td', { class: 'num' }, money(w.web, cur)), el('td', { class: 'num' }, money(w.negoce, cur)),
-        el('td', { class: 'num' }, el('a', { href: link({ due_from: w.ws, due_to: w.we }) }, money(w.sorties, cur))), el('td', { class: 'num ' + (w.delta < 0 ? 'fc-bad' : 'fc-ok') }, money(w.delta, cur)), el('td', { class: 'num ' + (w.cumul < 0 ? 'fc-bad' : '') }, money(w.cumul, cur)))))),
+        el('td', { class: 'num' }, el('a', { href: link2(w, 'textile') }, money(w.textile, cur))), el('td', { class: 'num' }, el('a', { href: link2(w, 'charges_fixes') }, money(w.fixes, cur))), el('td', { class: 'num' }, el('a', { href: link2(w, 'autre') }, money(w.autres, cur))),
+        el('td', { class: 'num ' + (w.delta < 0 ? 'fc-bad' : 'fc-ok') }, money(w.delta, cur)), el('td', { class: 'num ' + (w.cumul < 0 ? 'fc-bad' : '') }, money(w.cumul, cur)))))),
     notes.length ? el('div', { class: 'muted small' }, 'Hors : ' + notes.join(' · ') + '.') : null));
+}
+
+// ------------------------------------------------------------------ plans de paiement (facture découpée en échéances datées)
+const PLAN_ST = { reglee: ['réglée', 'b-ok'], a_venir: ['à venir', ''], en_retard: ['en retard', 'b-bad'] };
+function planEditor(inv, existing, onSave) {
+  // inv: {id, reference, supplier_name, amount_ttc, balance, currency} ; existing: échéances actuelles ou []
+  const cur = inv.currency || 'EUR', ttc = inv.amount_ttc;
+  const rows = [], list = el('div', { class: 'plan-rows' }), total = el('div', { class: 'plan-total' });
+  const toCents = v => Math.round(parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) * 100) || 0;
+  const refresh = () => { const sum = rows.reduce((t, r) => t + toCents(r.amt.value), 0); const diff = ttc - sum;
+    total.replaceChildren(el('span', {}, `Total des échéances : ${money(sum, cur)} / ${money(ttc, cur)}`), el('b', { class: diff === 0 ? 'fc-ok' : 'fc-bad' }, diff === 0 ? ' ✓' : ` écart ${money(diff, cur)}`)); return diff; };
+  const addRow = (date, amount) => {
+    const r = { date: el('input', { type: 'date', value: date || '' }), amt: el('input', { value: amount ? moneyIn(amount) : '', placeholder: '0,00', class: 'num' }), com: el('input', { placeholder: 'commentaire (facultatif)' }) };
+    r.amt.addEventListener('input', refresh);
+    const row = el('div', { class: 'plan-row' }, el('span', { class: 'muted small seq' }), r.date, r.amt, r.com,
+      el('button', { type: 'button', class: 'small', title: 'Retirer', onclick: () => { rows.splice(rows.indexOf(r), 1); row.remove(); renum(); refresh(); } }, '×'));
+    rows.push(r); list.appendChild(row); renum(); refresh();
+  };
+  const renum = () => list.querySelectorAll('.seq').forEach((e, i) => { e.textContent = (i + 1) + '.'; });
+  const split = n => { rows.splice(0); list.replaceChildren(); const base = Math.floor(ttc / n / 100) * 100; const start = new Date((inv.due_date || isoDate(new Date())) + 'T12:00:00');
+    for (let i = 0; i < n; i++) { const dte = new Date(start); dte.setMonth(dte.getMonth() + i); addRow(isoDate(dte), i === n - 1 ? ttc - base * (n - 1) : base); } };
+  if (existing && existing.length) existing.forEach(e => addRow(e.due_date, e.amount)); else split(2);
+  const comment = el('input', { placeholder: 'Motif / accord avec le fournisseur (facultatif, conservé dans l\'historique)' });
+  const body = el('div', { class: 'plan-editor' },
+    el('div', { class: 'muted small' }, `${inv.supplier_name || ''} · N° ${inv.reference || '—'} · TTC ${money(ttc, cur)} · reste à régler ${money(inv.balance, cur)}`),
+    el('div', { class: 'row', style: 'margin:8px 0' }, el('span', { class: 'muted small' }, 'Découper en :'), [2, 3, 4, 6].map(n => el('button', { type: 'button', class: 'small', onclick: () => split(n) }, n + ' parts')),
+      el('button', { type: 'button', class: 'small', onclick: () => addRow('', 0) }, '+ échéance')),
+    el('div', { class: 'plan-head' }, el('span'), el('span', {}, 'Date'), el('span', {}, 'Montant'), el('span', {}, 'Commentaire'), el('span')),
+    list, total, el('label', { class: 'f', style: 'margin-top:10px' }, 'Commentaire', comment));
+  const save = async close => {
+    const items = rows.map(r => ({ due_date: r.date.value, amount: toCents(r.amt.value), comment: r.com.value }));
+    if (items.some(i => !i.due_date)) { toast('Chaque échéance doit avoir une date', true); throw new Error('date'); }
+    if (refresh() !== 0) { toast('La somme des échéances doit être égale au TTC', true); throw new Error('sum'); }
+    await act(() => api('PUT', `/api/plans/${inv.id}`, { items, comment: comment.value }), 'Plan de paiement enregistré'); close(); if (onSave) onSave();
+  };
+  return { body, save };
+}
+function planModal(inv, existing, onSave) {
+  const ed = planEditor(inv, existing, onSave);
+  const actions = [{ label: existing && existing.length ? 'Enregistrer les modifications' : 'Créer le plan', fn: ed.save }];
+  if (existing && existing.length) actions.unshift({ label: 'Supprimer le plan', cls: 'danger', fn: async close => { await act(() => api('PUT', `/api/plans/${inv.id}`, { items: [], comment: 'Plan supprimé' }), 'Plan supprimé'); close(); if (onSave) onSave(); } });
+  modal((existing && existing.length ? 'Modifier le plan de paiement' : 'Nouveau plan de paiement'), ed.body, actions);
+}
+function planInstallments(items, cur) {
+  return el('div', { class: 'plan-list' }, items.map(e => el('div', { class: 'plan-item ' + e.statut }, el('span', { class: 'muted small' }, e.seq + '.'), el('span', {}, d(e.due_date)),
+    el('span', { class: 'num' }, money(e.amount, cur)), el('span', { class: 'badge ' + PLAN_ST[e.statut][1] }, PLAN_ST[e.statut][0]), e.comment ? el('span', { class: 'muted small' }, e.comment) : el('span'))));
+}
+function planHistory(h) {
+  return h.length ? el('div', { class: 'plan-hist' }, h.map(x => el('div', { class: 'small' }, el('b', {}, x.user_name), ` — ${dt(x.ts)} — ${x.action === 'creation' ? 'création' : x.action === 'suppression' ? 'suppression' : 'modification'}`,
+    x.new && x.action !== 'suppression' ? el('span', { class: 'muted' }, ' : ' + planSummary(x.new)) : null))) : el('div', { class: 'muted small' }, 'Aucun historique.');
+}
+function planSummary(s) { try { const j = JSON.parse(s.replace(/ — .*$/s, '')); const note = (s.match(/ — (.*)$/s) || [])[1]; return j.map(e => `${d(e.due_date)} ${money(e.amount, 'EUR')}`).join(' · ') + (note ? ` (${note})` : ''); } catch (e) { return s; } }
+function planPanel(inv) {
+  const box = el('div', { class: 'panel' }, el('h2', {}, 'Plan de paiement'));
+  const load = async () => {
+    const p = await api('GET', `/api/plans/${inv.id}`).catch(() => null);
+    const items = p ? p.installments : [];
+    box.replaceChildren(el('h2', {}, 'Plan de paiement'),
+      items.length ? [planInstallments(items, inv.currency), el('h3', {}, 'Historique du plan'), planHistory(p.history)] : el('div', { class: 'muted small' }, 'Aucun plan : la facture est payable en une fois à son échéance.'),
+      canWrite() && inv.amount_ttc != null ? el('div', { style: 'margin-top:8px' }, el('button', { class: 'small', onclick: () => planModal(p ? p.invoice : inv, items, load) }, items.length ? 'Modifier le plan' : 'Créer un plan de paiement')) : null);
+  };
+  load();
+  return box;
+}
+async function viewPlans(view) {
+  const p = Object.assign({ statut: 'ouvert', supplier_id: '' }, getHashParams());
+  const go = np => { location.hash = '#/plans?' + new URLSearchParams(Object.fromEntries(Object.entries(np).filter(([, v]) => v))); };
+  const head = el('div', { class: 'row', style: 'align-items:center;margin-bottom:12px' }, el('h1', { style: 'margin:0' }, 'Plans de paiement'), el('div', { class: 'grow' }));
+  const sel = el('select', { onchange: () => go({ ...p, statut: sel.value }) }, [['ouvert', 'Plans en cours'], ['solde', 'Plans soldés'], ['', 'Tous']].map(([v, l]) => el('option', { value: v, selected: p.statut === v ? 'selected' : null }, l)));
+  head.appendChild(sel);
+  if (canWrite()) head.appendChild(el('button', { class: 'primary', onclick: () => newPlanModal(() => render()) }, '+ Nouveau plan'));
+  view.appendChild(head);
+  view.appendChild(el('div', { class: 'muted page-sub' }, 'Une facture peut être découpée en plusieurs échéances datées (ex. 100 000 € en 2 × 50 000 €). Les prévisions du tableau de bord, de la synthèse et des fiches fournisseurs suivent ces échéances ; chaque création ou modification est historisée avec son auteur.'));
+  const data = await api('GET', '/api/plans?' + qs(p));
+  if (!data.rows.length) { view.appendChild(el('div', { class: 'panel empty' }, 'Aucun plan de paiement' + (p.statut ? ' dans cette catégorie' : '') + '.')); return; }
+  const cur = 'EUR';
+  const tot = data.rows.reduce((t, r) => t + (r.balance > 0 ? r.balance : 0), 0), late = data.rows.reduce((t, r) => t + r.retard, 0);
+  view.appendChild(el('div', { class: 'kpis' }, el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Plans'), el('div', { class: 'v' }, data.rows.length)),
+    el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Reste à régler sur ces plans'), el('div', { class: 'v' }, money(tot, cur))),
+    el('div', { class: 'kpi ' + (late ? 'bad' : 'ok') }, el('div', { class: 'l' }, 'Échéances en retard'), el('div', { class: 'v' }, money(late, cur)))));
+  view.appendChild(el('div', { class: 'plan-cards' }, data.rows.map(r => {
+    const next = r.echeances.find(e => e.statut !== 'reglee');
+    return el('div', { class: 'card plan-card' },
+      el('div', { class: 'plan-card-head' }, supAvatar(r.supplier_name), el('div', { class: 'grow' }, el('div', { class: 't' }, el('a', { href: '#/factures/' + r.id }, r.supplier_name), ' · ', el('span', { class: 'mono' }, 'N° ' + (r.reference || '—'))),
+          el('div', { class: 'm' }, `Facture du ${d(r.invoice_date)} · TTC ${money(r.amount_ttc, r.currency)} · reste ${money(r.balance, r.currency)}` + (r.validation_status === 'a_verifier' ? ' · à vérifier' : ''))),
+        el('div', { class: 'r' }, next ? [el('div', { class: 'small muted' }, next.statut === 'en_retard' ? 'En retard depuis le' : 'Prochaine échéance'), el('div', { class: next.statut === 'en_retard' ? 'fc-bad' : '' }, d(next.due_date) + ' · ' + money(next.amount, r.currency))] : el('span', { class: 'badge b-ok' }, 'soldé'))),
+      planInstallments(r.echeances, r.currency),
+      el('div', { class: 'plan-card-foot' }, el('span', { class: 'muted small' }, r.premier ? `Créé par ${r.premier.user_name} le ${dt(r.premier.ts)}` : '', r.dernier && r.premier && r.dernier.ts !== r.premier.ts ? ` · modifié par ${r.dernier.user_name} le ${dt(r.dernier.ts)}` : ''),
+        el('span', { class: 'grow' }), canWrite() ? el('button', { class: 'small', onclick: () => planModal({ id: r.id, reference: r.reference, supplier_name: r.supplier_name, amount_ttc: r.amount_ttc, balance: r.balance, currency: r.currency, due_date: r.prochaine }, r.echeances, () => render()) }, 'Modifier') : null,
+        el('a', { class: 'btn small', href: '#/factures/' + r.id }, 'Voir la facture')));
+  })));
+}
+function newPlanModal(onSave) {
+  // 1. choisir la facture (recherche fournisseur / numéro parmi les factures ouvertes), 2. découper
+  const q = el('input', { placeholder: 'Fournisseur, numéro de facture ou #id…' }), res = el('div', { class: 'plan-pick' });
+  let timer;
+  const search = async () => { const v = q.value.trim(); if (v.length < 2) { res.replaceChildren(); return; }
+    const data = await api('GET', '/api/invoices?' + qs({ search: v, doc_type: 'facture', open: '1', per_page: 12, sort: 'due_date', dir: 'asc' })).catch(() => ({ rows: [] }));
+    res.replaceChildren(data.rows.length ? data.rows.map(r => el('button', { type: 'button', class: 'pick', onclick: () => { close(); planModal({ id: r.id, reference: r.reference, supplier_name: r.supplier_name, amount_ttc: r.amount_ttc, balance: r.balance, currency: r.currency, due_date: r.due_date }, [], onSave); } },
+      supAvatar(r.supplier_name, 'sm'), el('span', { class: 'grow' }, el('div', { class: 't' }, r.supplier_name || 'Fournisseur non identifié'), el('div', { class: 'm' }, `N° ${r.reference || '—'} · ${d(r.invoice_date)} · échéance ${d(r.due_date)}`)),
+      el('span', { class: 'num' }, money(r.balance, r.currency)))) : el('div', { class: 'muted small' }, 'Aucune facture ouverte ne correspond.')); };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+  const close = modal('Nouveau plan de paiement — choisir la facture', el('div', {}, el('label', { class: 'f' }, 'Facture à découper', q), res), []);
 }
 
 // ------------------------------------------------------------------ filtres
@@ -1011,6 +1123,8 @@ async function viewInvoice(view, id) {
   }
   right.appendChild(fieldsPanel);
 
+  // Plan de paiement
+  if (inv.doc_type === 'facture') right.appendChild(planPanel(inv));
   // Règlements
   right.appendChild(paymentsPanel(inv));
   // Commentaires
