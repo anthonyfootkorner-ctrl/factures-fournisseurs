@@ -458,3 +458,13 @@ a.v:hover { color: var(--brand-2); }
 .treso-chart .cumul-pt { fill: #fff; } .treso-chart .cumul-pt.neg { fill: var(--bad); } .treso-chart .cumul-lab { fill: var(--muted); font-size: 10px; }
 .treso-table { margin-top: 10px; font-size: 12px; } .treso-table td, .treso-table th { padding: 6px 8px; }
 @media (max-width: 700px) { .treso-table th:nth-child(2), .treso-table td:nth-child(2), .treso-table th:nth-child(3), .treso-table td:nth-child(3) { display: none; } }
+/* fiche fournisseur */
+.sup-head { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; } .sup-head h1 { margin: 0 0 4px; }
+.sup-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.av.lg { width: 64px; height: 64px; border-radius: 18px; font-size: 20px; } .av.lg.logo { padding: 9px; }
+.sup-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.card.sk { margin-bottom: 0; padding: 14px 16px; } .card.sk .v { font-size: 22px; } .card.sk.warn .v { color: var(--warn); }
+.group-chart .bar-grey { fill: #5b6068; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; } .sup-lists .card { margin-bottom: 18px; }
+.list.compact > a { padding: 7px 0; grid-template-columns: minmax(0, 1fr) auto; }
+@media (max-width: 1100px) { .grid3 { grid-template-columns: 1fr; } }

@@ -188,6 +188,7 @@ async function apiRoute(method, url, body) {
   if (method === 'DELETE' && R(/^\/api\/allocations\/(\d+)$/)) return SB.rpc('allocation_delete', { p_id: +m[1] });
   if (method === 'GET' && R(/^\/api\/suppliers$/)) return supplierList(q);
   if (method === 'GET' && R(/^\/api\/suppliers\/(\d+)$/)) return SB.rpc('supplier_detail', { p_id: +m[1] });
+  if (method === 'GET' && R(/^\/api\/suppliers\/(\d+)\/stats$/)) return SB.rpc('supplier_stats', { p_id: +m[1], p_from: q.from || null });
   if (method === 'POST' && R(/^\/api\/suppliers$/)) return SB.rpc('supplier_create', { p: body }).then(id => ({ id }));
   if (method === 'PATCH' && R(/^\/api\/suppliers\/(\d+)$/)) return SB.rpc('supplier_update', { p_id: +m[1], p: body });
   if (method === 'POST' && R(/^\/api\/suppliers\/(\d+)\/approve$/)) return SB.rpc('supplier_approve', { p_id: +m[1] });

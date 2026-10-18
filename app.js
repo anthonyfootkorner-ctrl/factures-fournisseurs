@@ -1114,9 +1114,12 @@ function createSupplierModal() {
 }
 
 async function viewSupplier(view, id) {
-  const s = await api('GET', '/api/suppliers/' + id);
-  view.appendChild(el('div', { class: 'row', style: 'align-items:center;margin-bottom:12px' }, el('h1', { style: 'margin:0' }, s.name), badge('supplier', s.status), s.is_demo ? el('span', { class: 'badge b-demo' }, 'DÉMO') : null,
-    el('div', { class: 'grow' }), el('a', { class: 'btn small', href: '#/fournisseurs' }, '← Fournisseurs')));
+  const [s, st] = await Promise.all([api('GET', '/api/suppliers/' + id), api('GET', `/api/suppliers/${id}/stats`).catch(() => null)]);
+  view.appendChild(el('div', { class: 'sup-head' }, supAvatar(s.name, 'lg'),
+    el('div', { class: 'grow' }, el('h1', {}, s.name), el('div', { class: 'sup-sub' }, el('span', { class: 'fam-chip fam-' + (s.famille || 'autre') }, el('span', { class: 'fam-dot fam-' + (s.famille || 'autre') }), FAMILLES[s.famille || 'autre']),
+      badge('supplier', s.status), s.is_demo ? el('span', { class: 'badge b-demo' }, 'DÉMO') : null, s.payment_terms ? el('span', { class: 'muted small' }, '· ' + s.payment_terms) : null)),
+    el('a', { class: 'btn small', href: '#/fournisseurs' }, '← Fournisseurs')));
+  if (st) supplierDashboard(view, s, st);
   if (s.status === 'fusionne') view.appendChild(el('div', { class: 'callout' }, 'Fiche fusionnée dans ', el('a', { href: '#/fournisseurs/' + s.merged_into }, 'la fiche #' + s.merged_into)));
   if (s.status === 'propose') view.appendChild(el('div', { class: 'callout' }, 'Fiche créée automatiquement à partir d\'une facture : vérifiez les informations puis validez-la. ',
     canWrite() ? el('button', { class: 'primary small', onclick: () => act(() => api('POST', `/api/suppliers/${id}/approve`), 'Fiche validée').then(render) }, 'Valider la fiche') : null));
@@ -1164,6 +1167,59 @@ async function viewSupplier(view, id) {
   const sub = el('div');
   view.appendChild(sub);
   await viewInvoicesEmbedded(sub, { supplier_id: id }, 'Factures du fournisseur');
+}
+// ------------------------------------------------------------------ fiche fournisseur : tableau de bord visuel
+function groupChart(items, series, opts = {}) {
+  // items: [{label, values:{k: v}}] — barres groupées par série ; series: [{k, label, cls}]
+  const W = 720, H = opts.h || 220, padL = 52, padR = 10, padT = 18, padB = 30;
+  const max = Math.max(1, ...items.flatMap(it => series.map(sr => it.values[sr.k] || 0)));
+  const gw = (W - padL - padR) / Math.max(1, items.length), bw = gw * 0.78 / series.length;
+  const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart group-chart', role: 'img' });
+  for (let t = 0; t <= 4; t++) { const yy = padT + (H - padT - padB) * (1 - t / 4); g.appendChild(svg('line', { x1: padL, x2: W - padR, y1: yy, y2: yy, class: 'grid' })); g.appendChild(svg('text', { x: padL - 6, y: yy + 4, 'text-anchor': 'end' }, shortMoney(max * t / 4))); }
+  items.forEach((it, i) => {
+    series.forEach((sr, j) => {
+      const v = it.values[sr.k] || 0, h = v / max * (H - padT - padB);
+      const r = svg('rect', { x: padL + i * gw + gw * 0.11 + j * bw, y: H - padB - h, width: bw - 2, height: h, class: sr.cls, rx: 2 });
+      r.appendChild(svg('title', {}, `${it.title || it.label} — ${sr.label} : ${money(v, 'EUR')}`)); g.appendChild(r);
+    });
+    g.appendChild(svg('text', { x: padL + i * gw + gw / 2, y: H - padB + 14, 'text-anchor': 'middle' }, it.label));
+  });
+  return g;
+}
+function supplierDashboard(view, s, st) {
+  const cur = 'EUR', id = s.id, today = st.today;
+  const link = extra => '#/factures?' + new URLSearchParams(Object.fromEntries(Object.entries({ supplier_id: id, doc_type: 'facture', ...extra }).filter(([, v]) => v)));
+  const moisLib = (ym, long) => new Date(ym + '-01T12:00:00').toLocaleDateString('fr-FR', long ? { month: 'long', year: 'numeric' } : { month: 'short', year: '2-digit' });
+  const kpi = (l, v, sub, cls, href) => el(href ? 'a' : 'div', { class: 'card sk ' + (cls || ''), href: href || null }, el('div', { class: 'k' }, l), el('div', { class: 'v' }, v), sub ? el('div', { class: 's' }, sub) : null);
+  const pct = st.facture.ttc ? Math.round(st.paye.montant / st.facture.ttc * 100) : 0;
+  view.appendChild(el('div', { class: 'sup-kpis' },
+    kpi(`Facturé depuis le ${d(st.exercice_debut)}`, money(st.facture.ttc, cur), `${st.facture.n} facture(s)` + (st.avoirs.n ? ` · avoirs ${money(st.avoirs.ttc, cur)}` : ''), '', link({ from: st.exercice_debut })),
+    kpi('Payé sur l\'exercice', money(st.paye.montant, cur), `${pct} % du facturé · ${st.paye.n} règlement(s)`, 'ok', link({ from: st.exercice_debut, payment: 'payee,partielle' })),
+    kpi('Reste à régler', money(st.reste.montant, cur), `${st.reste.n} facture(s)` + (st.a_verifier.n ? ` · ${st.a_verifier.n} à vérifier` : ''), st.retard.montant ? 'warn' : '', link({ open: '1' })),
+    kpi('En retard', money(st.retard.montant, cur), st.retard.n ? `${st.retard.n} facture(s) échue(s)` : 'Aucune', st.retard.montant ? 'bad' : 'ok', link({ situation: 'en_retard' })),
+    kpi('Prochaine échéance', st.prochaine ? d(st.prochaine.date) : '—', st.prochaine ? `${money(st.prochaine.montant, cur)} · ${st.prochaine.n} facture(s)` : 'Rien à venir', '', st.prochaine ? link({ due_from: st.prochaine.date, due_to: st.prochaine.date, open: '1' }) : null),
+    kpi('Délai moyen de paiement', st.delai_moyen != null ? st.delai_moyen + ' j' : '—', st.credits.n ? `avoirs disponibles : ${money(st.credits.montant, cur)}` : 'après la date de facture', '', null)));
+  // règlements à venir par semaine d'échéance (12 semaines), comme sur le tableau de bord
+  const addDays = (iso, n) => { const x = new Date(iso + 'T12:00:00'); x.setDate(x.getDate() + n); return isoDate(x); };
+  const sem = st.semaines || [];
+  const totSem = sem.reduce((t, w) => t + w.montant, 0);
+  view.appendChild(el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Règlements à venir par semaine', el('span', { class: 'muted small' }, ' · 12 semaines · ', el('b', {}, money(totSem, cur)))),
+      el('a', { class: 'more', href: link({ open: '1', due_from: st.semaine_courante, due_to: addDays(st.semaine_courante, 83) }) }, 'Voir les factures')),
+    totSem ? areaChart(sem.map((w, i) => ({ label: d(w.semaine).slice(0, 5), v: w.montant, href: link({ open: '1', due_from: w.semaine, due_to: addDays(w.semaine, 6) }),
+        title: `${i === 0 ? 'Cette semaine' : 'Semaine du ' + d(w.semaine)} : ${money(w.montant, cur)} (${w.n} facture(s))` + (w.montant - w.valide > 0 ? ` — dont ${money(w.montant - w.valide, cur)} à vérifier` : '') })))
+      : el('div', { class: 'muted' }, 'Rien à régler sur les 12 prochaines semaines.'),
+    st.retard.montant || (st.sans_echeance && st.sans_echeance.montant) ? el('div', { class: 'muted small' }, 'Non compris : ' + [st.retard.montant ? `en retard ${money(st.retard.montant, cur)}` : '', st.sans_echeance && st.sans_echeance.montant ? `sans échéance ${money(st.sans_echeance.montant, cur)}` : ''].filter(Boolean).join(' · ') + '.') : null));
+  const li = (f, right) => el('a', { href: '#/factures/' + f.id }, el('span', {}, el('div', { class: 't' }, f.reference ? 'N° ' + f.reference : el('span', { class: 'todo' }, 'sans référence')), el('div', { class: 'm' }, (f.due_date < today ? 'échue le ' : 'échéance le ') + d(f.due_date) + (f.validation_status === 'a_verifier' ? ' · à vérifier' : ''))), right);
+  const lists = el('div', { class: 'grid3 sup-lists' },
+    el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Prochaines échéances'), el('a', { class: 'more', href: link({ open: '1', due_from: today }) }, 'Tout voir')),
+      el('div', { class: 'list compact' }, st.prochaines.length ? st.prochaines.map(f => li(f, el('span', { class: 'r' }, money(f.balance, cur)))) : el('div', { class: 'muted' }, 'Rien à venir.'))),
+    el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'En retard'), el('a', { class: 'more', href: link({ situation: 'en_retard' }) }, 'Tout voir')),
+      el('div', { class: 'list compact' }, st.en_retard.length ? st.en_retard.map(f => li(f, el('span', { class: 'r fc-bad' }, money(f.balance, cur)))) : el('div', { class: 'muted' }, 'Aucun retard.'))),
+    el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Derniers règlements')),
+      el('div', { class: 'list compact' }, st.reglements.length ? st.reglements.map(p => el('a', { href: '#/factures/' + p.invoice_id },
+        el('span', {}, el('div', { class: 't' }, (p.kind === 'avoir' ? 'Avoir ' + (p.ref || '') + ' imputé sur ' : (p.method || 'Règlement') + ' · ') + 'N° ' + (p.reference || '—')), el('div', { class: 'm' }, d(p.date) + (p.kind !== 'avoir' && p.ref ? ' · ' + p.ref : ''))),
+        el('span', { class: 'r fc-ok' }, money(p.amount, cur)))) : el('div', { class: 'muted' }, 'Aucun règlement enregistré.'))));
+  view.appendChild(lists);
 }
 async function viewInvoicesEmbedded(view, filter, title) {
   const data = await api('GET', '/api/invoices?' + qs({ ...filter, per_page: 200, sort: 'invoice_date' }));
