@@ -497,3 +497,6 @@ a.v:hover { color: var(--brand-2); }
 .late-week summary > span:first-child { flex: 1; } .late-list { margin-top: 6px; }
 .late-older { display: flex; justify-content: space-between; padding: 8px 12px; color: var(--ink2); font-size: 13px; border: 1px dashed var(--line); border-radius: 10px; }
 .late-older:hover { border-color: var(--bad); }
+tr.db-nocov td { color: var(--muted); }
+.db-bar { height: 8px; border-radius: 4px; background: var(--panel3); overflow: hidden; }
+.db-fill { height: 100%; background: var(--brand); border-radius: 4px; }

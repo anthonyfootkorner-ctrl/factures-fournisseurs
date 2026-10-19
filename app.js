@@ -1866,7 +1866,7 @@ async function viewEncaissements(view) {
   // Onglets
   const nTodo = ov.providers.reduce((s, x) => s + x.n_anomalies, 0);
   const nPay = ov.providers.reduce((s, x) => s + x.n_versements, 0);
-  const tabs = [['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['ventes-jour', 'Ventes par jour'], ['previsionnel', 'Prévisionnel'], ['tva', 'TVA & CA'], ['parametres', 'Paramètres']];
+  const tabs = [['dashboard', 'Tableau de bord'], ['a-traiter', `À traiter (${nTodo})`], ['versements', `Versements (${nPay})`], ['ventes-jour', 'Ventes par jour'], ['previsionnel', 'Prévisionnel'], ['tva', 'TVA & CA'], ['parametres', 'Paramètres']];
   if (canWrite() && !S.demo) tabs.push(['deposer', 'Déposer des exports']);
   const body = el('div');
   view.appendChild(el('div', { class: 'panel' }, el('div', { class: 'tabs' }, tabs.map(([k, l]) => el('button', { class: p.tab === k ? 'on' : '', onclick: () => go({ ...p, tab: k, page: 1, etat: '', kind: '' }) }, l))), body));
@@ -1874,6 +1874,7 @@ async function viewEncaissements(view) {
   else if (p.tab === 'ventes-jour') await pspSalesByDayTab(body, p, go);
   else if (p.tab === 'previsionnel') await pspForecastTab(body, p, go);
   else if (p.tab === 'tva') await pspVatTab(body, p, go);
+  else if (p.tab === 'dashboard') await pspDashboardTab(body, p, go);
   else if (p.tab === 'parametres') await pspSettingsTab(body, ov);
   else if (p.tab === 'deposer') body.appendChild(uploadPanel({ title: 'Déposez les exports des prestataires', label: 'Exports encaissements web', accept: '.csv,.xlsx',
     hint: 'Shopify : transactions des commandes, versements et transactions Shopify Payments, export Commandes (n° TikTok) — JUST (CSV) — TikTok Shop (income .xlsx) — PayPlug (rapport comptable CSV), Alma (export comptable CSV), PayPal (historique « Impact sur le solde » CSV) — Global-e (avis de paiement PDF « Remittance Advice » et rapports hebdomadaires « ReconciliationReport … Euro.xlsx »). Reconnus automatiquement ; un export qui recouvre une période déjà chargée n\'ajoute que les nouveautés.',
@@ -2061,6 +2062,65 @@ function fcSyncLine(sync) {
     s.covered_from ? ` · période couverte du ${d(s.covered_from)} au ${d(s.covered_to)}` : '',
     s.last_count !== null && s.last_count !== undefined ? ` · ${s.last_count} ligne(s) au dernier passage` : '',
     s.last_error ? el('div', { class: 'muted' }, 'Dernière erreur : ' + s.last_error) : null);
+}
+
+// ------------------------------------------------------------------ Tableau de bord : CA encaissé par moyen de paiement, exercice fiscal (migration 39)
+async function pspDashboardTab(body, p, go) {
+  const ec = exerciceCourant();
+  const cur = { from: p.db_from || '', to: p.db_to || '' };
+  const isFy = y => { const [a, b] = exercice(y); return (cur.from || isoDate(exercice(ec)[0])) === isoDate(a) && (cur.to || isoDate(exercice(ec)[1])) === isoDate(b); };
+  const tile = y => { const [a, b] = exercice(y);
+    return el('button', { class: 'fy-tile' + (isFy(y) ? ' on' : ''), onclick: () => go({ ...p, db_from: isoDate(a), db_to: isoDate(b) }) },
+      el('span', { class: 'fy-y' }, `${y}-${String(y + 1).slice(2)}`), el('span', { class: 'fy-d' }, `juin ${y} → mai ${y + 1}`), y === ec ? el('span', { class: 'fy-cur' }, 'en cours') : null); };
+  const from = el('input', { type: 'date', value: cur.from }), to = el('input', { type: 'date', value: cur.to });
+  const dash = await api('GET', '/api/psp/dashboard?' + qs(cur));
+  const provs = dash.providers, months = dash.months;
+  const cell = {}; dash.rows.forEach(r => { cell[r.provider + '|' + r.month] = r; });
+  const sales = {}; dash.sales.forEach(x => { sales[x.month] = x; });
+  const stk = {}; dash.stockly.forEach(x => { stk[x.month] = x.amount; });
+  const tot = provs.reduce((a, x) => ({ g: a.g + x.gross, r: a.r + x.refunds, n: a.n + x.net }), { g: 0, r: 0, n: 0 });
+  const stkTot = dash.stockly.reduce((a, x) => a + x.amount, 0);
+  const cov = dash.coverage || {};
+  const covered = m => cov.pay_from && m >= cov.pay_from && m <= cov.pay_to;
+  const mLabel = m => { const s = new Date(+m.slice(0, 4), +m.slice(5, 7) - 1, 1).toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }); return s.charAt(0).toUpperCase() + s.slice(1); };
+  body.append(
+    el('p', { class: 'small muted' }, 'Chiffre d\'affaires web réellement encaissé, par moyen de paiement (rapport « Paiements » de Shopify). Montants TTC, port inclus, nets des remboursements ; ',
+      'un paiement compte le jour de l\'encaissement, un remboursement le jour du remboursement. Les commandes jamais payées n\'y figurent pas. Les encaissements des caisses magasin, qui remontent aussi dans Shopify, sont exclus.'),
+    el('div', { class: 'row', style: 'align-items:flex-end;gap:14px;margin:10px 0 14px' },
+      el('div', {}, el('div', { class: 'f-label' }, 'Exercice fiscal'), el('div', { class: 'fy-grid', style: 'grid-template-columns:repeat(3,minmax(150px,1fr))' }, [ec - 2, ec - 1, ec].map(tile))),
+      el('div', {}, el('div', { class: 'f-label' }, 'Ou une période'), el('div', { class: 'row', style: 'gap:6px' }, el('label', { class: 'f' }, 'Du', from), el('label', { class: 'f' }, 'Au', to),
+        el('button', { class: 'small', style: 'align-self:flex-end', onclick: () => go({ ...p, db_from: from.value, db_to: to.value }) }, 'Appliquer')))),
+    el('div', { class: 'small muted', style: 'margin-bottom:10px' }, `Période du ${d(dash.from)} au ${d(dash.to)}`
+      + (cov.pay_from ? ` · encaissements connus de ${mLabel(cov.pay_from)} à ${mLabel(cov.pay_to)}, lus le ${dt(cov.fetched_at)}` : ' · aucune donnée d\'encaissement chargée')));
+  if (!provs.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucun encaissement sur cette période.')); return; }
+  // Indicateurs
+  body.appendChild(el('div', { class: 'kpis' },
+    el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'CA web encaissé (net)'), el('div', { class: 'v' }, money(tot.n, 'EUR')), el('div', { class: 'small muted' }, `brut ${money(tot.g)} · remboursé ${money(tot.r)}`)),
+    stkTot ? el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Stockly (vente B2B, hors encaissement)'), el('div', { class: 'v' }, money(stkTot, 'EUR')), el('div', { class: 'small muted' }, 'au prix public, facturé par TSG Lab')) : null,
+    provs.slice(0, 3).map(x => el('div', { class: 'kpi' }, el('div', { class: 'l' }, x.label), el('div', { class: 'v' }, money(x.net, 'EUR')), el('div', { class: 'small muted' }, `${(100 * x.net / (tot.n || 1)).toFixed(1).replace('.', ',')} % du web`)))));
+  // Répartition par moyen de paiement
+  const bar = x => el('div', { class: 'db-bar' }, el('div', { class: 'db-fill', style: `width:${Math.max(0, Math.min(100, 100 * x.net / (tot.n || 1))).toFixed(1)}%` }));
+  body.appendChild(el('div', { class: 'table-wrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, el('th', {}, 'Moyen de paiement'), el('th', { class: 'num' }, 'Encaissé brut'), el('th', { class: 'num' }, 'Remboursé'), el('th', { class: 'num' }, 'Net'), el('th', { class: 'num' }, 'Part'), el('th', { style: 'width:28%' }, ''))),
+    el('tbody', {}, provs.map(x => el('tr', {}, el('td', {}, el('strong', {}, x.label)), el('td', { class: 'num' }, money(x.gross)), el('td', { class: 'num muted' }, money(x.refunds)),
+        el('td', { class: 'num' }, el('strong', {}, money(x.net))), el('td', { class: 'num' }, `${(100 * x.net / (tot.n || 1)).toFixed(1).replace('.', ',')} %`), el('td', {}, bar(x)))),
+      el('tr', { class: 'vat-total' }, el('td', {}, el('strong', {}, 'Total web')), el('td', { class: 'num' }, el('strong', {}, money(tot.g))), el('td', { class: 'num' }, el('strong', {}, money(tot.r))),
+        el('td', { class: 'num' }, el('strong', {}, money(tot.n))), el('td', { class: 'num' }, '100 %'), el('td', {}))))));
+  // Mois × moyen de paiement
+  const head = el('tr', {}, el('th', {}, 'Mois'), provs.map(x => el('th', { class: 'num' }, x.label)), el('th', { class: 'num' }, 'Total web'), stkTot ? el('th', { class: 'num' }, 'Stockly') : null, el('th', { class: 'num' }, 'CA ventes Shopify'));
+  const rows = months.map(m => { const t = provs.reduce((a, x) => a + ((cell[x.code + '|' + m] || {}).net || 0), 0);
+    return el('tr', { class: covered(m) ? null : 'db-nocov' }, el('td', { class: 'nowrap' }, mLabel(m)),
+      provs.map(x => { const c = cell[x.code + '|' + m]; return el('td', { class: 'num' + (c ? '' : ' muted') }, c ? money(c.net) : (covered(m) ? '—' : '')); }),
+      el('td', { class: 'num' }, el('strong', {}, covered(m) ? money(t) : el('span', { class: 'muted' }, 'non chargé'))),
+      stkTot ? el('td', { class: 'num' }, stk[m] ? money(stk[m]) : '—') : null,
+      el('td', { class: 'num' }, sales[m] ? money(sales[m].total_sales) : el('span', { class: 'muted' }, '—'))); });
+  rows.push(el('tr', { class: 'vat-total' }, el('td', {}, el('strong', {}, 'Total')), provs.map(x => el('td', { class: 'num' }, el('strong', {}, money(x.net)))), el('td', { class: 'num' }, el('strong', {}, money(tot.n))),
+    stkTot ? el('td', { class: 'num' }, el('strong', {}, money(stkTot))) : null, el('td', { class: 'num' }, el('strong', {}, money(dash.sales.reduce((a, x) => a + x.total_sales, 0))))));
+  body.append(el('h2', { style: 'margin-top:22px' }, 'Par mois'), el('div', { class: 'table-wrap' }, el('table', { class: 'db-months' }, el('thead', {}, head), el('tbody', {}, rows))),
+    el('div', { class: 'small muted', style: 'margin-top:8px' },
+      'CA ventes Shopify : total des ventes du rapport « Ventes » (date de commande), pour les mois où il est chargé ; il diffère un peu de l\'encaissé (décalage commande / paiement, commandes expirées comptées par Shopify, Stockly sans encaissement). ',
+      dash.magasin && dash.magasin.net ? `Encaissements des caisses magasin exclus sur la période : ${money(dash.magasin.net)}. ` : '',
+      'Global-e : montant payé par les clients à l\'étranger (droits et taxes compris), pas le net reversé.'));
 }
 
 // ------------------------------------------------------------------ TVA & CA (rapport « Ventes » Shopify par commande, migration 38)
