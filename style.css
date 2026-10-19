@@ -489,3 +489,11 @@ a.v:hover { color: var(--brand-2); }
 @media (max-width: 900px) { .treso-table th:nth-child(4), .treso-table td:nth-child(4), .treso-table th:nth-child(5), .treso-table td:nth-child(5), .treso-table th:nth-child(6), .treso-table td:nth-child(6) { display: none; } }
 .plan-pick label.pick { cursor: pointer; } .plan-pick label.pick input { width: auto; margin: 0; }
 .plan-card .badge { margin: 0 6px; } .plan-card details { margin-top: 6px; } .plan-card summary { cursor: pointer; color: var(--muted); }
+.late-box { margin-top: 18px; border-top: 1px solid var(--line2); padding-top: 14px; }
+.late-weeks { display: flex; flex-direction: column; gap: 6px; }
+.late-week { background: var(--panel2); border: 1px solid var(--line2); border-radius: 10px; padding: 8px 12px; }
+.late-week summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 13px; list-style: none; gap: 10px; }
+.late-week summary::-webkit-details-marker { display: none; } .late-week summary::before { content: "▸"; color: var(--muted); margin-right: 8px; } .late-week[open] summary::before { content: "▾"; }
+.late-week summary > span:first-child { flex: 1; } .late-list { margin-top: 6px; }
+.late-older { display: flex; justify-content: space-between; padding: 8px 12px; color: var(--ink2); font-size: 13px; border: 1px dashed var(--line); border-radius: 10px; }
+.late-older:hover { border-color: var(--bad); }

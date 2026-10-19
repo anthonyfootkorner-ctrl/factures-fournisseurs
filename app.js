@@ -675,14 +675,17 @@ async function tresoBlock(slot, { monday, sem, cur, treso, link }) {
     api('GET', '/api/psp/forecast?' + qs({ from: monday, to: end })).catch(() => null),
     api('GET', '/api/negoce/previsions?' + qs({})).catch(() => null),
   ]);
+  const retardS = sem.find(x => x.semaine === 'retard') || { montant: 0, familles: {} };
   const weeks = Array.from({ length: N }, (_, i) => {
     const ws = addDays(monday, i * 7), we = addDays(ws, 6);
     const s = sem.find(x => x.semaine === ws) || { montant: 0, familles: {} };
-    const fam = s.familles || {};
+    const fam = { ...(s.familles || {}) };
+    let sorties = s.montant || 0, retard = 0;
+    if (i === 0 && retardS.montant) { retard = retardS.montant; sorties += retard; Object.entries(retardS.familles || {}).forEach(([k, v]) => { fam[k] = (fam[k] || 0) + v; }); }  // les retards reviennent sur la semaine en cours
     const w = (web && web.days ? web.days : []).filter(d => d.date >= ws && d.date <= we).reduce((t, d) => t + (d.total_prevu || 0), 0);
     const n = neg && neg.semaines ? (neg.semaines.find(x => x.semaine === ws) || { montant: 0 }).montant : 0;
-    const textile = fam.textile || 0, fixes = fam.charges_fixes || 0, autres = Math.max(0, (s.montant || 0) - textile - fixes);
-    return { ws, we, web: w, negoce: n, textile, fixes, autres, sorties: s.montant || 0, delta: w + n - (s.montant || 0) };
+    const textile = fam.textile || 0, fixes = fam.charges_fixes || 0, autres = Math.max(0, sorties - textile - fixes);
+    return { ws, we, web: w, negoce: n, textile, fixes, autres, sorties, retard, delta: w + n - sorties };
   });
   let cumul = treso ? treso.solde : 0;
   weeks.forEach(w => { cumul += w.delta; w.cumul = cumul; });
@@ -710,12 +713,32 @@ async function tresoBlock(slot, { monday, sem, cur, treso, link }) {
   if (!neg) notes.push('prévision négoce indisponible');
   else if (neg.retard && neg.retard.total) notes.push(`retards clients non comptés : ${money(neg.retard.total, cur)} (encaissements négoce pas encore rapprochés : chiffres bruts)`);
   const retardF = (sem.find(x => x.semaine === 'retard') || {}).montant;
-  if (retardF) notes.push(`retards fournisseurs non comptés : ${money(retardF, cur)}`);
+  // échéances passées non réglées : 4 dernières semaines détaillées (factures), le reste groupé
+  let lateBox = null;
+  if (retardF) {
+    const from = addDays(monday, -28), to = addDays(monday, -1);
+    const late = await api('GET', '/api/invoices?' + qs({ doc_type: 'facture', open: '1', due_from: from, due_to: to, per_page: 500, sort: 'due_date', dir: 'desc' })).catch(() => ({ rows: [] }));
+    const wk = [0, 1, 2, 3].map(i => { const ws = addDays(monday, -7 * (i + 1)), we = addDays(ws, 6); const rows = late.rows.filter(r => r.due_date >= ws && r.due_date <= we && (r.currency || 'EUR') === cur);
+      return { ws, we, rows, montant: rows.reduce((t, r) => t + (r.balance || 0), 0), title: i === 0 ? 'Semaine dernière' : `Il y a ${i + 1} semaines` }; });
+    const older = retardF - wk.reduce((t, w) => t + w.montant, 0);
+    const reload = () => tresoBlock(slot, { monday, sem, cur, treso, link });
+    const rowsOf = w => el('div', { class: 'list compact late-list' }, w.rows.slice(0, 12).map(r => el('a', { href: '#/factures/' + r.id },
+      el('span', {}, el('div', { class: 't' }, r.supplier_name || 'Fournisseur non identifié'), el('div', { class: 'm' }, `N° ${r.reference || '—'} · échéance le ${d(r.due_date)}` + (r.validation_status === 'a_verifier' ? ' · à vérifier' : ''))),
+      el('span', { class: 'r fc-bad' }, money(r.balance, cur), canWrite() ? el('div', {}, el('button', { type: 'button', class: 'small', onclick: e => { e.preventDefault(); e.stopPropagation(); reportModal([r], reload); } }, 'Reporter')) : null))),
+      w.rows.length > 12 ? el('a', { class: 'more small', href: link({ due_from: w.ws, due_to: w.we }) }, `+ ${w.rows.length - 12} autre(s)`) : null);
+    lateBox = el('div', { class: 'late-box' },
+      el('div', { class: 'card-head' }, el('h2', {}, 'Non payé à l\'échéance', el('span', { class: 'muted small' }, ' · total en retard ', el('b', { class: 'fc-bad' }, money(retardF, cur)))), el('a', { class: 'more', href: link({ situation: 'en_retard' }) }, 'Toutes les factures en retard')),
+      el('div', { class: 'late-weeks' }, wk.map((w, i) => el('details', { class: 'late-week', open: i === 0 && w.rows.length ? true : null },
+        el('summary', {}, el('span', {}, w.title, ' ', el('span', { class: 'muted small' }, `${d(w.ws).slice(0, 5)} → ${d(w.we).slice(0, 5)}`)), el('span', { class: 'num' }, w.rows.length ? `${w.rows.length} facture(s) · ` : '', el('b', { class: w.montant ? 'fc-bad' : 'fc-ok' }, w.montant ? money(w.montant, cur) : 'rien'))),
+        w.rows.length ? [rowsOf(w), canWrite() ? el('div', { style: 'margin-top:6px' }, el('button', { type: 'button', class: 'small', onclick: () => reportModal(w.rows, reload) }, `Reporter les ${w.rows.length} facture(s) de cette semaine…`)) : null] : el('div', { class: 'muted small', style: 'padding:6px 0' }, 'Aucune facture non réglée sur cette semaine.'))),
+        older > 0 ? el('a', { class: 'late-older', href: link({ situation: 'en_retard', due_to: addDays(monday, -29) }) }, el('span', {}, 'Plus ancien (avant le ' + d(addDays(monday, -28)) + ')'), el('b', { class: 'fc-bad' }, money(older, cur))) : null),
+      el('div', { class: 'muted small' }, 'Ces montants sont comptés sur la semaine en cours. Pour les décaler, utilisez « Reporter » (nouvelle échéance, historisée) ou un plan de paiement ; marquez-les payés s\'ils le sont.'));
+  }
   const fin4 = weeks[3].cumul, fin8 = weeks[N - 1].cumul, entrees = tot('web') + tot('negoce'), sorties = tot('sorties');
   const kpi = (l, v, cls, sub) => el('div', { class: 'tk' }, el('div', { class: 'tk-l' }, l), el('div', { class: 'tk-v ' + (cls || '') }, money(v, cur)), sub ? el('div', { class: 'tk-s' }, sub) : null);
   const legend = el('div', { class: 'legend' }, el('span', {}, el('i', { style: 'background:#3ecf8e' }), 'Web'), el('span', {}, el('i', { style: 'background:#2bb3c9' }), 'Négoce'),
     el('span', {}, el('i', { style: 'background:#ff6b1a' }), 'Textile'), el('span', {}, el('i', { style: 'background:#6fa8ff' }), 'Charges fixes'), el('span', {}, el('i', { style: 'background:#5b6068' }), 'Autres'), el('span', {}, el('i', { style: 'background:#fff' }), 'Trésorerie projetée'));
-  const link2 = (w, fam) => link({ due_from: w.ws, due_to: w.we, famille: fam });
+  const link2 = (w, fam) => w.retard ? link({ due_to: w.we, famille: fam }) : link({ due_from: w.ws, due_to: w.we, famille: fam });
   slot.replaceChildren(el('div', { class: 'card treso' },
     el('div', { class: 'card-head' }, el('h2', {}, `Trésorerie prévisionnelle · ${N} semaines`), legend),
     el('div', { class: 'treso-kpis' },
@@ -726,12 +749,33 @@ async function tresoBlock(slot, { monday, sem, cur, treso, link }) {
       kpi('Projeté à 4 sem.', fin4, fin4 < 0 ? 'fc-bad' : ''), kpi(`Projeté à ${N} sem.`, fin8, fin8 < 0 ? 'fc-bad' : '')),
     g,
     el('table', { class: 'treso-table' }, el('thead', {}, el('tr', {}, el('th', {}, 'Semaine'), el('th', { class: 'num' }, 'Web'), el('th', { class: 'num' }, 'Négoce'), el('th', { class: 'num' }, 'Textile'), el('th', { class: 'num' }, 'Charges fixes'), el('th', { class: 'num' }, 'Autres'), el('th', { class: 'num' }, 'Delta'), el('th', { class: 'num' }, 'Trésorerie'))),
-      el('tbody', {}, weeks.map(w => el('tr', {}, el('td', {}, `${d(w.ws).slice(0, 5)} → ${d(w.we).slice(0, 5)}`), el('td', { class: 'num' }, money(w.web, cur)), el('td', { class: 'num' }, money(w.negoce, cur)),
+      el('tbody', {}, weeks.map(w => el('tr', {}, el('td', {}, `${d(w.ws).slice(0, 5)} → ${d(w.we).slice(0, 5)}`, w.retard ? el('div', { class: 'muted small' }, `dont retard ${money(w.retard, cur)}`) : null), el('td', { class: 'num' }, money(w.web, cur)), el('td', { class: 'num' }, money(w.negoce, cur)),
         el('td', { class: 'num' }, el('a', { href: link2(w, 'textile') }, money(w.textile, cur))), el('td', { class: 'num' }, el('a', { href: link2(w, 'charges_fixes') }, money(w.fixes, cur))), el('td', { class: 'num' }, el('a', { href: link2(w, 'autre') }, money(w.autres, cur))),
         el('td', { class: 'num ' + (w.delta < 0 ? 'fc-bad' : 'fc-ok') }, money(w.delta, cur)), el('td', { class: 'num ' + (w.cumul < 0 ? 'fc-bad' : '') }, money(w.cumul, cur)))))),
-    notes.length ? el('div', { class: 'muted small' }, 'Hors : ' + notes.join(' · ') + '.') : null));
+    notes.length ? el('div', { class: 'muted small' }, 'Hors : ' + notes.join(' · ') + '.') : null,
+    lateBox));
 }
 
+// ------------------------------------------------------------------ reporter une ou plusieurs échéances à une date précise (historisé sur chaque facture)
+function reportModal(rows, onDone) {
+  const cur = rows[0].currency || 'EUR', total = rows.reduce((t, r) => t + (r.balance || 0), 0);
+  const date = el('input', { type: 'date', value: '' }), note = el('input', { placeholder: 'Motif (facultatif, ajouté en commentaire sur chaque facture)' });
+  modal(rows.length > 1 ? `Reporter ${rows.length} factures` : 'Reporter l\'échéance', el('div', {},
+    el('div', { class: 'muted small', style: 'margin-bottom:8px' }, rows.length > 1 ? `${rows.length} facture(s) · ${money(total, cur)}` : `${rows[0].supplier_name || ''} · N° ${rows[0].reference || '—'} · ${money(rows[0].balance, cur)} · échéance actuelle le ${d(rows[0].due_date)}`),
+    el('label', { class: 'f' }, 'Nouvelle date d\'échéance', date), el('label', { class: 'f' }, 'Motif', note),
+    el('div', { class: 'muted small' }, 'La nouvelle date remplace l\'échéance (règle « Saisie manuelle ») et sera prise en compte partout : tableau de bord, trésorerie, fiche fournisseur. L\'ancienne date reste dans l\'historique de la facture.')),
+    [{ label: 'Reporter', fn: async close => {
+      if (!date.value) { toast('Choisissez une date', true); throw new Error('date'); }
+      let ok = 0, ko = [];
+      for (const r of rows) {
+        try { await api('PATCH', `/api/invoices/${r.id}`, { due_date: date.value }); if (note.value.trim()) await api('POST', `/api/invoices/${r.id}/comments`, { body: `Échéance reportée au ${d(date.value)} : ${note.value.trim()}` }).catch(() => {}); ok++; }
+        catch (e) { ko.push(`N° ${r.reference || '#' + r.id} : ${e.message}`); }
+      }
+      toast(`${ok} échéance(s) reportée(s) au ${d(date.value)}` + (ko.length ? ` — ${ko.length} refus` : ''), !ok);
+      if (ko.length) modal('Reports refusés', el('ul', { class: 'list-plain' }, ko.map(x => el('li', {}, x))));
+      close(); if (onDone) onDone();
+    } }]);
+}
 // ------------------------------------------------------------------ plans de paiement (une facture ou un lot de factures découpés en échéances datées)
 const PLAN_ST = { reglee: ['réglée', 'b-ok'], a_venir: ['à venir', ''], en_retard: ['en retard', 'b-bad'] };
 // lot = { ids:[...], invoices:[{id, reference, supplier_name, amount_ttc, balance, currency, due_date}], label?, plan_id? }
