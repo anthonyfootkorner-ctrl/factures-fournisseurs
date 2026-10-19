@@ -83,6 +83,11 @@ const L = {
   src: { document: ['lu', 'Valeur lue dans le document'], calcul: ['calculé', 'Valeur calculée'], saisie: ['saisi', 'Valeur saisie / corrigée par un utilisateur'], referentiel: ['réf.', 'Valeur issue du référentiel'] },
 };
 function asList(v) { return Array.isArray(v) ? v : (typeof v === 'string' && v ? (() => { try { return JSON.parse(v); } catch (e) { return [v]; } })() : []); }
+function pspEtat(v) { return v.etat === 'en_transit' && ['scheduled', 'pending'].includes(String(v.status || '').toLowerCase()) ? 'programme' : v.etat; }
+const PSP_ETAT_AIDE = { recu: 'Virement retrouvé sur le compte bancaire, montant conforme', en_transit: 'Le prestataire a envoyé le virement ; il n\'est pas encore sur un relevé importé',
+  programme: 'Virement annoncé par le prestataire, pas encore envoyé', en_retard: 'Le virement aurait dû arriver sur le compte : à vérifier',
+  ecart: 'Le montant reçu en banque ne correspond pas au versement annoncé', releve_manquant: 'Relevé bancaire de cette période pas encore importé' };
+function pspEtatBadge(v) { const k = pspEtat(v); const b = badge('psp_etat', k); if (PSP_ETAT_AIDE[k]) b.title = PSP_ETAT_AIDE[k]; return b; }
 function badge(map, key) { const v = (L[map] || {})[key] || [key, '']; return el('span', { class: 'badge ' + v[1] }, v[0]); }
 
 function modal(title, body, actions) {
@@ -1777,7 +1782,9 @@ function ignoreModal(r) {
 
 // ------------------------------------------------------------------ suivi des encaissements web
 // 3 niveaux : commande Shopify → transaction chez le prestataire → versement du prestataire → opération bancaire.
-L.psp_etat = { recu: ['Reçu', 'b-ok'], en_transit: ['En transit', 'b-info'], en_retard: ['En retard', 'b-bad'], ecart: ['Écart', 'b-bad'],
+// « Programmé » : annoncé mais pas encore parti ; « Envoyé » : parti chez le prestataire, pas encore retrouvé sur un relevé ;
+// « Reçu et vérifié » : rattaché à un crédit bancaire, montant conforme.
+L.psp_etat = { recu: ['Reçu et vérifié', 'b-ok'], en_transit: ['Envoyé', 'b-info'], programme: ['Programmé', ''], en_retard: ['En retard', 'b-bad'], ecart: ['Écart', 'b-bad'],
   releve_manquant: ['Relevé à importer', 'b-warn'], negatif: ['Règlement négatif', 'b-warn'], echec: ['Échec', 'b-bad'] };
 L.psp_todo = { commande_introuvable: ['Commande introuvable chez le prestataire', 'b-bad'], ecart_montant: ['Écart de montant', 'b-warn'],
   versement_retard: ['Versement non arrivé', 'b-bad'], ecart_versement: ['Écart de versement', 'b-bad'], litige: ['Litige / chargeback', 'b-warn'],
@@ -1785,7 +1792,7 @@ L.psp_todo = { commande_introuvable: ['Commande introuvable chez le prestataire'
   tiktok_sans_correspondance: ['Commandes TikTok sans n° TikTok', 'b-info'] };
 const PSP_KIND = { sale: 'Vente', capture: 'Capture', refund: 'Remboursement', charge: 'Paiement', chargeback: 'Chargeback', chargeback_hold: 'Fonds retenus (litige)',
   chargeback_hold_release: 'Fonds libérés', adjustment: 'Ajustement', fee: 'Frais' };
-const PSP_STATUS = { paid: 'payé', in_transit: 'en transit', scheduled: 'programmé', pending: 'en attente', failed: 'échec' };
+const PSP_STATUS = { paid: 'envoyé', in_transit: 'en cours d\'envoi', scheduled: 'programmé', pending: 'en attente', failed: 'échec' };
 const PSP_LINK = { reference: 'par référence', montant_date: 'montant + date', manuel: 'manuel' };
 const PSP_ACK = { cmd: 'Commande introuvable', ecart: 'Écart de montant', payout: 'Versement', litige: 'Litige', bank: 'Crédit bancaire', tiktok_sans_ref: 'Commandes TikTok sans n°' };
 const monthLabel = m => { const [y, mo] = m.split('-'); const s = new Date(+y, +mo - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }); return s.charAt(0).toUpperCase() + s.slice(1); };
@@ -1908,7 +1915,7 @@ async function pspPayoutsTab(body, p, go, ov) {
       el('td', { class: 'small' }, r.n_tx ? `${r.n_tx} · ${money(r.sum_tx)}` : '—'),
       el('td', { class: 'small', style: 'max-width:300px' }, r.bank_transaction_id ? [el('div', {}, `${d(r.bank_date)} — ${money(r.bank_amount)}`), el('div', { class: 'muted' }, r.bank_label), el('div', { class: 'muted' }, PSP_LINK[r.link_mode] || r.link_mode)]
         : el('span', { class: 'muted' }, `attendu au plus tard le ${d(r.expected_by)}`)),
-      el('td', {}, badge('psp_etat', r.etat)),
+      el('td', {}, pspEtatBadge(r)),
       el('td', { class: 'nowrap' }, !canWrite() || r.amount <= 0 ? null : r.bank_transaction_id
         ? el('button', { class: 'small', onclick: () => confirmBox('Détacher de l\'opération bancaire', 'Le lien sera supprimé (historisé). Un lien automatique détaché ne sera plus proposé.', 'Détacher',
             () => act(() => api('POST', `/api/psp/payouts/${r.id}/unlink`, {})).then(render)) }, 'Détacher')
@@ -1980,9 +1987,9 @@ async function pspTracePanel(order, onClose) {
         el('td', { class: 'small nowrap' }, d(x.tx_at)), el('td', { class: 'small' }, `${PSP_KIND[x.kind] || x.kind} · ${x.provider_label}`),
         el('td', { class: 'num' }, money(x.gross), x.fee ? el('div', { class: 'small muted' }, `frais ${money(x.fee)} · net ${money(x.net)}`) : null)))))
         : el('div', { class: 'small muted' }, tracked ? 'Aucune transaction chez le prestataire dans les exports importés.' : 'Moyen d\'encaissement sans versement suivi.')),
-    col('3. Versement → banque', t.payouts.length ? (t.payouts.every(v => v.etat === 'recu') ? ok(true, 'reçu') : badge('psp_etat', t.payouts[0].etat)) : el('span', { class: 'badge' }, '—'),
+    col('3. Versement → banque', t.payouts.length ? (t.payouts.every(v => v.etat === 'recu') ? ok(true, 'reçu et vérifié') : pspEtatBadge(t.payouts[0])) : el('span', { class: 'badge' }, '—'),
       t.payouts.length ? el('div', {}, t.payouts.map(v => el('div', { class: 'small', style: 'margin-bottom:6px' },
-        el('div', {}, `${v.provider_label} — versement du ${d(v.payout_date)} : ${money(v.amount)} `, badge('psp_etat', v.etat)),
+        el('div', {}, `${v.provider_label} — versement du ${d(v.payout_date)} : ${money(v.amount)} `, pspEtatBadge(v)),
         v.bank_transaction_id ? el('div', { class: 'muted' }, `Banque ${d(v.bank_date)} — ${money(v.bank_amount)} — ${v.bank_label}`) : el('div', { class: 'muted' }, `Pas encore sur les relevés (attendu au plus tard le ${d(v.expected_by)})`))))
         : el('div', { class: 'small muted' }, t.transactions.some(x => x.payout_date) ? `Versement prévu le ${d(t.transactions.find(x => x.payout_date).payout_date)}` : 'Pas encore de versement.'))));
   if (t.anomalies.length) panel.appendChild(el('div', { style: 'margin-top:8px' }, t.anomalies.map(a => el('div', { class: 'anomaly alerte' }, el('div', {}, el('strong', {}, (L.psp_todo[a.kind] || [a.kind])[0]), ' — ', a.message)))));
@@ -2331,7 +2338,7 @@ function vjDetail(dd, x, c) {
       el('td', { class: 'small' }, el('div', {}, d(v.payout_date)), el('div', { class: 'mono muted' }, v.bank_ref || v.ext_id || '—')),
       el('td', { class: 'num' }, vjEur(v.amount)),
       el('td', { class: 'small' }, v.bank_date ? `${d(v.bank_date)} — ${vjEur(v.bank_amount)}` : el('span', { class: 'muted' }, `attendu au plus tard le ${d(v.expected_by)}`)),
-      el('td', {}, badge('psp_etat', v.etat))))))] : [];
+      el('td', {}, pspEtatBadge(v))))))] : [];
   modal(`${x.label} — ventes du ${FC_DOW_LONG[dd.dow].toLowerCase()} ${d(dd.date)}`, el('div', {},
     el('div', { class: 'row vj-detail-head' }, c.statut ? badge('vj_statut', c.statut) : null, vjPctBadge(c.pct_recu, c.statut, c.net_recu, c.net), qual,
       c.source ? el('span', { class: 'small muted' }, 'Statut ' + VJ_SOURCE[c.source]) : null),
