@@ -1912,7 +1912,10 @@ function pspCards(ov, p, go) {
   const hasData = x => { const c = x.couverture || {}; return !!((c.transactions || {}).du || (c.versements || {}).du); };
   const cov = x => { const c = x.couverture || {}; const r = (c.transactions || {}).du ? c.transactions : (c.versements || {}); return r.du ? `exports du ${d(r.du)} au ${d(r.au)}` : 'aucun export prestataire'; };
   // Le suivi détaillé (commandes, transactions, versements) commence avec la synchro Shopify : avant, seul le Tableau de bord est renseigné.
-  const cov0 = ov.providers.map(x => ((x.couverture || {}).commandes || {}).du).filter(Boolean).sort()[0];
+  // Début du suivi détaillé : première transaction prestataire ou première commande synchronisée (la plus tardive des deux, quelques
+  // commandes anciennes modifiées récemment étant synchronisées avec leur date d'origine).
+  const first = k => ov.providers.map(x => ((x.couverture || {})[k] || {}).du).filter(Boolean).sort()[0];
+  const cov0 = [first('commandes'), first('transactions')].filter(Boolean).sort().pop();
   const before = !!cov0 && p.to < cov0, partial = !!cov0 && !before && p.from < cov0;
   const card = x => el('div', { class: 'kpi psp-card' + (x.n_anomalies ? ' has-pb' : '') },
     el('div', { class: 'psp-head' }, el('strong', {}, x.label),
