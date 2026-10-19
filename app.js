@@ -2096,7 +2096,7 @@ async function pspDashboardTab(body, p, go) {
   // Indicateurs
   body.appendChild(el('div', { class: 'kpis' },
     el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'CA web encaissé (net)'), el('div', { class: 'v' }, money(tot.n, 'EUR')), el('div', { class: 'small muted' }, `brut ${money(tot.g)} · remboursé ${money(tot.r)}`)),
-    stkTot ? el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Stockly (vente B2B, hors encaissement)'), el('div', { class: 'v' }, money(stkTot, 'EUR')), el('div', { class: 'small muted' }, 'au prix public, facturé par TSG Lab')) : null,
+    stkTot ? el('div', { class: 'kpi' }, el('div', { class: 'l' }, 'Stockly (vente B2B, hors encaissement)'), el('div', { class: 'v' }, money(stkTot, 'EUR')), el('div', { class: 'small muted' }, 'au prix public ; facturé par TSG Lab (voir TVA & CA)')) : null,
     provs.slice(0, 3).map(x => el('div', { class: 'kpi' }, el('div', { class: 'l' }, x.label), el('div', { class: 'v' }, money(x.net, 'EUR')), el('div', { class: 'small muted' }, `${(100 * x.net / (tot.n || 1)).toFixed(1).replace('.', ',')} % du web`)))));
   // Répartition par moyen de paiement
   const bar = x => el('div', { class: 'db-bar' }, el('div', { class: 'db-fill', style: `width:${Math.max(0, Math.min(100, 100 * x.net / (tot.n || 1))).toFixed(1)}%` }));
@@ -2118,8 +2118,8 @@ async function pspDashboardTab(body, p, go) {
     stkTot ? el('td', { class: 'num' }, el('strong', {}, money(stkTot))) : null, el('td', { class: 'num' }, el('strong', {}, money(dash.sales.reduce((a, x) => a + x.total_sales, 0))))));
   body.append(el('h2', { style: 'margin-top:22px' }, 'Par mois'), el('div', { class: 'table-wrap' }, el('table', { class: 'db-months' }, el('thead', {}, head), el('tbody', {}, rows))),
     el('div', { class: 'small muted', style: 'margin-top:8px' },
-      'CA ventes Shopify : total des ventes du rapport « Ventes » (date de commande), pour les mois où il est chargé ; il diffère un peu de l\'encaissé (décalage commande / paiement, commandes expirées comptées par Shopify, Stockly sans encaissement). ',
-      dash.magasin && dash.magasin.net ? `Encaissements des caisses magasin exclus sur la période : ${money(dash.magasin.net)}. ` : '',
+      'CA ventes Shopify : total des ventes web du rapport « Ventes » (date de commande, hors canal magasin « SyncTo Fastmag ») ; il diffère un peu de l\'encaissé (décalage commande / paiement, commandes expirées comptées par Shopify, Stockly sans encaissement). ',
+      dash.magasin && (dash.magasin.net || dash.magasin.ventes) ? `Caisses magasin exclues sur la période : ${money(dash.magasin.net)} encaissés (cartes, espèces, chèques cadeaux) pour ${money(dash.magasin.ventes || 0)} de ventes synchronisées depuis Fastmag. ` : '',
       'Global-e : montant payé par les clients à l\'étranger (droits et taxes compris), pas le net reversé.'));
 }
 
