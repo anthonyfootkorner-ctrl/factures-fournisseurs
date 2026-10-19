@@ -1901,13 +1901,26 @@ async function viewEncaissements(view) {
   else await pspTodoTab(body, p, go, ov);
 }
 
+// Logo d'un moyen de paiement : fichier img/psp/<code>.svg (ou .png) s'il est déposé dans le site, sinon monogramme aux couleurs de la marque.
+const PSP_BRAND = { shopify_payments: ['S', '#95BF47'], just: ['J', '#111111'], tiktok_shop: ['T', '#000000'], payplug: ['P', '#4F3CC9'], alma: ['A', '#FA5022'],
+  paypal: ['P', '#003087'], globale: ['G', '#1B2A6B'], stockly: ['S', '#2563EB'], baback: ['B', '#0F766E'], gift_card: ['C', '#B45309'], autre: ['?', '#6B7280'] };
+function pspLogo(code, label) {
+  const [ini, color] = PSP_BRAND[code] || [(label || '?').charAt(0).toUpperCase(), '#6B7280'];
+  const box = el('span', { class: 'psp-logo', style: `background:${color}` }, ini);
+  const img = el('img', { class: 'psp-logo', alt: label || code, src: `img/psp/${code}.svg` });
+  img.onerror = () => { img.onerror = () => img.replaceWith(box); img.src = `img/psp/${code}.png`; };
+  return img;
+}
+
 function pspCards(ov, p, go) {
   const tracked = ov.providers.filter(x => x.tracked);
   const others = ov.providers.filter(x => !x.tracked && x.ca_brut);
   // Montant principal des cartes : encaissé net (rapport « Paiements » Shopify par mois, tout l'historique) ; les commandes
   // synchronisées (nombre, CA commandes) ne sont connues que depuis le début de la synchro.
   const enc = x => x.encaisse || 0;
-  const tot = tracked.reduce((a, x) => ({ ca: a.ca + enc(x), n: a.n + x.n_commandes, f: a.f + x.frais, v: a.v + x.verse, w: a.w + x.en_attente }), { ca: 0, n: 0, f: 0, v: 0, w: 0 });
+  const tot = tracked.reduce((a, x) => ({ ca: a.ca + enc(x), n: a.n + x.n_commandes, f: a.f + x.frais, v: a.v + x.verse, w: a.w + x.en_attente, r: a.r + (x.recu_banque || 0),
+    rb: a.rb + (x.encaisse_rembourse || 0), h: a.h + (x.hors_releves || 0), nh: a.nh + (x.n_hors_releves || 0), nv: a.nv + (x.n_versements || 0), nr: a.nr + (x.n_recus || 0), pb: a.pb + (x.n_anomalies || 0) }),
+    { ca: 0, n: 0, f: 0, v: 0, w: 0, r: 0, rb: 0, h: 0, nh: 0, nv: 0, nr: 0, pb: 0 });
   const allCa = ov.providers.reduce((s, x) => s + enc(x), 0);
   const hasData = x => { const c = x.couverture || {}; return !!((c.transactions || {}).du || (c.versements || {}).du); };
   const cov = x => { const c = x.couverture || {}; const r = (c.transactions || {}).du ? c.transactions : (c.versements || {}); return r.du ? `exports du ${d(r.du)} au ${d(r.au)}` : 'aucun export prestataire'; };
@@ -1918,7 +1931,7 @@ function pspCards(ov, p, go) {
   const cov0 = [first('commandes'), first('transactions')].filter(Boolean).sort().pop();
   const before = !!cov0 && p.to < cov0, partial = !!cov0 && !before && p.from < cov0;
   const card = x => el('div', { class: 'kpi psp-card' + (x.n_anomalies ? ' has-pb' : '') },
-    el('div', { class: 'psp-head' }, el('strong', {}, x.label),
+    el('div', { class: 'psp-head' }, el('span', { class: 'psp-title' }, pspLogo(x.code, x.label), el('strong', {}, x.label)),
       x.n_anomalies ? el('a', { href: '#', class: 'badge b-bad', onclick: e => { e.preventDefault(); go({ ...p, tab: 'a-traiter', provider: x.code, kind: '' }); } }, `${x.n_anomalies} à traiter`)
         : (!hasData(x) ? (x.n_commandes ? el('span', { class: 'badge b-warn' }, 'Aucun export') : null)
           : el('span', { class: 'badge b-ok' }, 'RAS'))),
@@ -1935,10 +1948,22 @@ function pspCards(ov, p, go) {
   const notice = before || partial ? el('div', { class: 'small muted', style: 'margin:0 0 10px' },
     `Les montants des cartes sont les encaissements Shopify par moyen de paiement (tout l'historique). Le suivi détaillé (commandes, frais, versements, banque) commence le ${d(cov0)}` +
     (before ? ' : il n\'est pas disponible sur cette période.' : ' : il ne couvre que la partie de la période postérieure à cette date.')) : null;
+  const totalCard = el('div', { class: 'kpi psp-card psp-total' },
+    el('div', { class: 'psp-head' }, el('span', { class: 'psp-title' }, el('span', { class: 'psp-logo', style: 'background:var(--accent)' }, 'Σ'), el('strong', {}, 'Total web')),
+      tot.pb ? el('a', { href: '#', class: 'badge b-bad', onclick: e => { e.preventDefault(); go({ ...p, tab: 'a-traiter', provider: '', kind: '' }); } }, `${tot.pb} à traiter`) : el('span', { class: 'badge b-ok' }, 'RAS')),
+    el('div', { class: 'v' }, money(allCa, 'EUR')),
+    el('div', { class: 's' }, `encaissé net, ${tracked.length} moyens de paiement suivis` + (tot.rb ? ` · remboursé ${money(tot.rb)}` : '') + (allCa !== tot.ca ? ` · dont sans versement suivi ${money(allCa - tot.ca)}` : '')),
+    el('dl', { class: 'psp-lines' },
+      el('dt', {}, 'Frais'), el('dd', {}, tot.f ? `${money(tot.f)} (${pct(tot.f, tot.ca)})` : '—'),
+      el('dt', {}, 'Versé'), el('dd', {}, money(tot.v) + (tot.nv ? ` · ${tot.nv} vers.` : '')),
+      el('dt', {}, 'Reçu en banque'), el('dd', { class: tot.v && tot.r < tot.v ? 'warn' : '' }, money(tot.r) + (tot.nv ? ` · ${tot.nr}/${tot.nv}` : '')),
+      el('dt', {}, 'En attente'), el('dd', {}, money(tot.w)),
+      tot.h ? [el('dt', { title: PSP_ETAT_AIDE.hors_releves }, 'Avant les relevés'), el('dd', { class: 'muted' }, money(tot.h) + ` · ${tot.nh} vers.`)] : null),
+    el('div', { class: 'small muted' }, `Du ${d(p.from)} au ${d(p.to)}`));
   return el('div', {},
     el('div', { class: 'row', style: 'align-items:baseline;margin-bottom:8px' }, el('h2', { style: 'margin:0' }, p.from === isoDate(exercice(exerciceCourant())[0]) && p.to === isoDate(exercice(exerciceCourant())[1]) ? `Exercice ${exerciceCourant()}-${String(exerciceCourant() + 1).slice(2)}` : `Du ${d(p.from)} au ${d(p.to)}`),
       el('span', { class: 'muted' }, `Encaissé net ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')}` + (tot.n && !before ? ` (${tot.n} commandes)` : '') + ` · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
-    notice, el('div', { class: 'psp-cards' }, tracked.map(card)),
+    notice, el('div', { class: 'psp-cards' }, totalCard, tracked.map(card)),
     others.length ? el('div', { class: 'small muted', style: 'margin:-6px 0 16px' }, 'Sans versement suivi : ', others.map(x => `${x.label} ${money(x.ca_brut, 'EUR')} (${x.n_commandes} cmd)`).join(' · ')) : null);
 }
 
