@@ -2148,9 +2148,17 @@ const VAT_KIND = {
 };
 
 async function pspVatTab(body, p, go) {
-  const v = await api('GET', '/api/psp/vat?' + qs({ month: p.vat_month || '' }));
-  if (!v.months.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucune donnée : la synchro Shopify du détail TVA n\'a pas encore tourné.')); return; }
-  const cur = v.months.find(m => m.month === v.month) || v.months[0];
+  // Mois de la période choisie en haut de page (from / to) ; détail extrait mois par mois depuis Shopify (psp_vat_lines)
+  const mFrom = (p.from || '').slice(0, 7), mTo = (p.to || '').slice(0, 7);
+  const wanted = []; for (let y = +mFrom.slice(0, 4), m = +mFrom.slice(5, 7); `${y}-${String(m).padStart(2, '0')}` <= mTo && wanted.length < 24; m++) { if (m > 12) { m = 1; y++; } wanted.push(`${y}-${String(m).padStart(2, '0')}`); }
+  const all = await api('GET', '/api/psp/vat?' + qs({ month: p.vat_month || '' }));
+  const v = { ...all, months: all.months.filter(m => m.month >= mFrom && m.month <= mTo) };
+  const missing = wanted.filter(m => !v.months.some(x => x.month === m) && m <= new Date().toISOString().slice(0, 7));
+  const extract = canWrite() && !S.demo && missing.length ? el('button', { onclick: () => act(async () => { for (const m of missing) await api('POST', '/api/psp/vat/refresh', { month: m }); },
+    `Extraction lancée pour ${missing.length} mois : comptez 2 à 3 minutes par mois, puis rechargez la page.`) }, `Extraire ${missing.length === 1 ? 'le mois manquant' : missing.length + ' mois manquants'} depuis Shopify`) : null;
+  if (!v.months.length) { body.appendChild(el('div', { class: 'empty' }, `Le détail TVA n\'est pas encore extrait pour la période du ${d(p.from)} au ${d(p.to)}. `, extract)); return; }
+  if (missing.length) body.appendChild(el('div', { class: 'small muted', style: 'margin-bottom:10px' }, `${missing.length} mois de la période ne sont pas encore extraits (${missing.map(monthLabel).join(', ')}). `, extract));
+  const cur = v.months.find(m => m.month === (p.vat_month || '')) || v.months[0];
   const ttc = (ht, tva) => (ht || 0) + (tva || 0);
   const download = m => m.export
     ? el('button', { class: 'small', title: `Généré le ${dt(m.export.generated_at)} — ${m.export.lines} lignes`, onclick: e => { e.stopPropagation(); act(() => openStored('exports', m.export.path, m.export.filename)); } }, 'Excel')
@@ -2223,6 +2231,7 @@ async function pspVatTab(body, p, go) {
 }
 
 async function pspForecastTab(body, p, go) {
+  body.appendChild(el('div', { class: 'small muted', style: 'margin-bottom:8px' }, 'Cet onglet projette les arrivées en banque des prochains jours : la période choisie en haut de page ne s\'applique pas ici.'));
   const f = await api('GET', '/api/psp/forecast?' + qs({ from: p.fc_from || '', to: p.fc_to || '' }));
   const provs = f.providers;
   const nav = n => go({ ...p, fc_from: fcShift(f.from, n), fc_to: fcShift(f.to, n) });
@@ -2343,6 +2352,7 @@ function vjRangeBar(p, go, from, to, f) {
 }
 
 async function pspSalesByDayTab(body, p, go) {
+  body.appendChild(el('div', { class: 'small muted', style: 'margin-bottom:8px' }, 'Cet onglet se lit au jour le jour (62 jours au plus) : il a son propre sélecteur de dates, la période choisie en haut de page ne s\'applique pas ici.'));
   const from = vjIso(p.from || p.vj_from), to = vjIso(p.to || p.vj_to);
   let f;
   try { f = await api('GET', '/api/psp/sales-by-day?' + qs({ from, to })); }
