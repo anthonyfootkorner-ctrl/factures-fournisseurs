@@ -2170,15 +2170,15 @@ async function pspVatTab(body, p, go) {
     : el('span', { class: 'small muted nowrap' }, 'en préparation');
   body.append(
     el('p', { class: 'small muted' }, 'CA web et part France taxable, mois par mois, d\'après le rapport « Ventes » de Shopify détaillé commande par commande (ventes le jour de la commande, retours le jour du remboursement, frais de port inclus). ',
-      'Corrections appliquées : les commandes jamais payées (paiement expiré) sont retirées, Shopify les comptant quand même ; la TVA des ventes TikTok, importées sans TVA, est extraite du TTC ; ',
+      'Corrections appliquées : les commandes jamais payées (paiement expiré) et les ventes magasin synchronisées depuis Fastmag (canal SyncTo Fastmag) sont retirées, Shopify les comptant quand même ; la TVA des ventes TikTok, importées sans TVA, est extraite du TTC ; ',
       'Stockly est remplacé par la facture de TSG Lab (partie à 20 %). L\'Excel complet de chaque mois contient le détail de toutes les commandes et se met à jour automatiquement.'),
     el('div', { class: 'table-wrap' }, el('table', {},
-      el('thead', {}, el('tr', {}, el('th', {}, 'Mois'), el('th', { class: 'num' }, 'CA Shopify affiché'), el('th', { class: 'num' }, 'Non payées retirées'),
+      el('thead', {}, el('tr', {}, el('th', {}, 'Mois'), el('th', { class: 'num' }, 'CA Shopify affiché'), el('th', { class: 'num', title: 'Commandes jamais payées et ventes magasin synchronisées depuis Fastmag' }, 'Retiré'),
         el('th', { class: 'num' }, 'CA web réel TTC'), el('th', { class: 'num' }, 'dont France'), el('th', { class: 'num' }, 'France taxable HT'),
         el('th', { class: 'num' }, 'TVA 20 %'), el('th', {}, 'Stockly'), el('th', {}, 'Fichier'))),
       el('tbody', {}, v.months.map(m => el('tr', { class: m.month === cur.month ? 'vat-on' : null, style: 'cursor:pointer', onclick: () => go({ ...p, vat_month: m.month }) },
         el('td', { class: 'nowrap' }, el('strong', {}, monthLabel(m.month))),
-        el('td', { class: 'num' }, money(m.shopify)), el('td', { class: 'num muted' }, m.non_payees ? '−' + money(m.non_payees) : '—'),
+        el('td', { class: 'num' }, money(m.shopify)), el('td', { class: 'num muted', title: m.magasin ? `dont ventes magasin Fastmag ${money(m.magasin)}` : null }, (m.non_payees || m.magasin) ? '−' + money((m.non_payees || 0) + (m.magasin || 0)) : '—'),
         el('td', { class: 'num' }, el('strong', {}, money(m.ca_reel))), el('td', { class: 'num' }, money(m.france)),
         el('td', { class: 'num' }, el('strong', {}, money(m.france_ht))), el('td', { class: 'num' }, el('strong', {}, money(m.france_tva))),
         el('td', { class: 'small' }, m.stockly ? `facture ${m.stockly.invoice_no}` : el('span', { class: 'muted' }, '—')),
@@ -2216,6 +2216,7 @@ async function pspVatTab(body, p, go) {
     ['Baback (France, sans TVA dans Shopify) : à confirmer avec le comptable', sum(['baback'], 'ttc'), 'TTC'],
     ['Ventes hors France payées (UE, DOM, export, Global-e…)', sum(['hors_france'], 'ttc'), 'TTC'],
     ['Commandes non payées (paiement expiré), comptées à tort par Shopify', sum(['non_payee', 'non_payee_fr'], 'ttc'), 'TTC'],
+    ['Ventes magasin synchronisées depuis Fastmag (canal SyncTo Fastmag) : hors CA web', sum(['magasin'], 'ttc'), 'TTC'],
   ].filter(x => x[1]);
   const actions = el('div', { class: 'row', style: 'margin:10px 0;align-items:center' },
     cur.export ? el('button', { class: 'primary', onclick: () => act(() => openStored('exports', cur.export.path, cur.export.filename)) }, `Télécharger l'Excel complet de ${monthLabel(cur.month).toLowerCase()}`) : el('span', { class: 'muted' }, 'Excel en préparation par le poste de traitement…'),
