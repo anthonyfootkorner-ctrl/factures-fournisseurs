@@ -1843,21 +1843,39 @@ const monthLabel = m => { const [y, mo] = m.split('-'); const s = new Date(+y, +
 const pct = (a, b) => b ? (a / b * 100).toFixed(2).replace('.', ',') + ' %' : '—';
 
 async function viewEncaissements(view) {
-  const p = Object.assign({ tab: 'a-traiter', page: 1 }, getHashParams());
+  const p = Object.assign({ tab: 'dashboard', page: 1 }, getHashParams());
   const go = np => { location.hash = '#/encaissements?' + new URLSearchParams(Object.fromEntries(Object.entries(np).filter(([, v]) => v !== '' && v !== null && v !== undefined))); };
-  const ov = await api('GET', '/api/psp/overview?' + qs({ month: p.month || '' }));
+  // Période unique pour toute la page : exercice fiscal (défaut : en cours), mois ou dates libres (hash from / to)
+  const ec = exerciceCourant();
+  if (!p.from || !p.to) { const [a, b] = exercice(ec); p.from = isoDate(a); p.to = isoDate(b); }
+  const per = { from: p.from, to: p.to };
+  const ov = await api('GET', '/api/psp/overview?' + qs(per));
   const month = ov.month;
   view.append(el('h1', {}, 'Suivi des encaissements web'),
     el('p', { class: 'muted' }, 'CA web par moyen d\'encaissement et contrôle des versements des prestataires, en trois niveaux : chaque commande Shopify doit se retrouver chez le prestataire, ',
       'chaque transaction dans un versement, chaque versement sur un relevé bancaire. Le rattachement à la banque ne modifie pas l\'écran Banque.'));
-  // Barre : mois, recherche de commande, rapprochement
-  const monthSel = el('select', {}, ov.months.map(m => el('option', { value: m, selected: m === month ? 'selected' : null }, monthLabel(m))));
-  monthSel.addEventListener('change', () => go({ ...p, month: monthSel.value, page: 1 }));
+  // Barre de période : exercice fiscal, mois, dates libres — tout ce qui suit (cartes, onglets) suit cette période
+  const isRange = (a, b) => p.from === isoDate(a) && p.to === isoDate(b);
+  const fyChip = y => { const [a, b] = exercice(y);
+    return el('button', { class: 'small per-chip' + (isRange(a, b) ? ' primary' : ''), onclick: () => go({ ...p, from: isoDate(a), to: isoDate(b), page: 1 }) },
+      `Exercice ${y}-${String(y + 1).slice(2)}`, y === ec ? el('span', { class: 'per-cur' }, ' · en cours') : null); };
+  const monthOf = m => { const a = new Date(+m.slice(0, 4), +m.slice(5, 7) - 1, 1); return [a, new Date(a.getFullYear(), a.getMonth() + 1, 0)]; };
+  const curMonth = ov.months.find(m => isRange(...monthOf(m))) || '';
+  const monthSel = el('select', {}, el('option', { value: '' }, 'Choisir un mois…'), ov.months.map(m => el('option', { value: m, selected: m === curMonth ? 'selected' : null }, monthLabel(m))));
+  monthSel.addEventListener('change', () => { if (!monthSel.value) return; const [a, b] = monthOf(monthSel.value); go({ ...p, from: isoDate(a), to: isoDate(b), page: 1 }); });
+  const from = el('input', { type: 'date', value: p.from }), to = el('input', { type: 'date', value: p.to });
   const search = el('input', { type: 'search', placeholder: 'W-712345, n° de commande TikTok…', value: p.order || '' });
   const doSearch = () => go({ ...p, order: search.value.trim() });
   search.addEventListener('keydown', e => e.key === 'Enter' && doSearch());
-  view.appendChild(el('div', { class: 'panel' }, el('div', { class: 'row' },
-    el('label', { class: 'f' }, 'Mois', monthSel), el('label', { class: 'f grow' }, 'Rechercher une commande', search), el('button', { onclick: doSearch }, 'Afficher le parcours'),
+  view.appendChild(el('div', { class: 'panel per-bar' },
+    el('div', { class: 'row', style: 'align-items:flex-end;gap:10px;flex-wrap:wrap' },
+      el('div', {}, el('div', { class: 'f-label' }, 'Exercice fiscal (juin → mai)'), el('div', { class: 'row', style: 'gap:6px' }, [ec - 2, ec - 1, ec].map(fyChip))),
+      el('label', { class: 'f' }, 'Mois', monthSel),
+      el('label', { class: 'f' }, 'Du', from), el('label', { class: 'f' }, 'Au', to),
+      el('button', { class: 'small', onclick: () => { if (from.value && to.value && from.value <= to.value) go({ ...p, from: from.value, to: to.value, page: 1 }); else toast('Choisissez une période valide', true); } }, 'Appliquer'),
+      el('span', { class: 'small muted', style: 'margin-left:auto' }, `Période affichée : du ${d(p.from)} au ${d(p.to)}`)),
+    el('div', { class: 'row', style: 'margin-top:10px' },
+    el('label', { class: 'f grow' }, 'Rechercher une commande', search), el('button', { onclick: doSearch }, 'Afficher le parcours'),
     canWrite() ? el('button', { onclick: () => act(() => api('POST', '/api/psp/match?' + qs({}))).then(r => {
       toast(`Rapprochement : ${r.transactions_rattachees} transaction(s) rattachée(s), ${r.banque_par_reference + r.banque_par_montant} versement(s) retrouvé(s) en banque`); render(); }) }, 'Relancer le rapprochement') : null),
     el('div', { class: 'small muted', style: 'margin-top:6px' }, ov.bank_last_date ? `Relevés bancaires importés jusqu'au ${d(ov.bank_last_date)}.` : 'Aucun relevé bancaire importé : les versements ne peuvent pas encore être contrôlés.')));
@@ -1903,7 +1921,7 @@ function pspCards(ov, p, go) {
       el('dt', {}, 'En attente'), el('dd', {}, money(x.en_attente))),
     el('div', { class: 'small muted' }, cov(x)));
   return el('div', {},
-    el('div', { class: 'row', style: 'align-items:baseline;margin-bottom:8px' }, el('h2', { style: 'margin:0' }, monthLabel(ov.month)),
+    el('div', { class: 'row', style: 'align-items:baseline;margin-bottom:8px' }, el('h2', { style: 'margin:0' }, p.from === isoDate(exercice(exerciceCourant())[0]) && p.to === isoDate(exercice(exerciceCourant())[1]) ? `Exercice ${exerciceCourant()}-${String(exerciceCourant() + 1).slice(2)}` : `Du ${d(p.from)} au ${d(p.to)}`),
       el('span', { class: 'muted' }, `CA web ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')} (${tot.n} commandes) · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
     el('div', { class: 'psp-cards' }, tracked.map(card)),
     others.length ? el('div', { class: 'small muted', style: 'margin:-6px 0 16px' }, 'Sans versement suivi : ', others.map(x => `${x.label} ${money(x.ca_brut, 'EUR')} (${x.n_commandes} cmd)`).join(' · ')) : null);
@@ -1916,7 +1934,7 @@ function pspProviderSelect(ov, value, onChange) {
 }
 
 async function pspTodoTab(body, p, go, ov) {
-  const data = await api('GET', '/api/psp/todo?' + qs({ month: ov.month, provider: p.provider || '', kind: p.kind || '', limit: 300 }));
+  const data = await api('GET', '/api/psp/todo?' + qs({ from: p.from, to: p.to, provider: p.provider || '', kind: p.kind || '', limit: 300 }));
   const c = data.compteurs || {};
   const chips = el('div', { class: 'row', style: 'gap:6px;margin-bottom:10px' },
     el('button', { class: 'small' + (!p.kind ? ' primary' : ''), onclick: () => go({ ...p, kind: '' }) }, `Tout (${Object.values(c).reduce((s, n) => s + n, 0)})`),
@@ -1944,13 +1962,13 @@ async function pspTodoTab(body, p, go, ov) {
 }
 
 async function pspPayoutsTab(body, p, go, ov) {
-  const data = await api('GET', '/api/psp/payouts?' + qs({ month: ov.month, provider: p.provider || '', etat: p.etat || '', page: p.page || 1, per_page: 50 }));
+  const data = await api('GET', '/api/psp/payouts?' + qs({ from: p.from, to: p.to, provider: p.provider || '', etat: p.etat || '', page: p.page || 1, per_page: 50 }));
   const c = data.compteurs || {};
   body.append(el('div', { class: 'row', style: 'margin-bottom:10px' }, el('label', { class: 'f' }, 'Prestataire', pspProviderSelect(ov, p.provider, v => go({ ...p, provider: v, page: 1 })))),
     el('div', { class: 'row', style: 'gap:6px;margin-bottom:10px' },
       el('button', { class: 'small' + (!p.etat ? ' primary' : ''), onclick: () => go({ ...p, etat: '', page: 1 }) }, `Tous (${Object.values(c).reduce((s, n) => s + n, 0)})`),
       Object.keys(L.psp_etat).filter(k => c[k]).map(k => el('button', { class: 'small' + (p.etat === k ? ' primary' : ''), onclick: () => go({ ...p, etat: k, page: 1 }) }, `${L.psp_etat[k][0]} (${c[k]})`))));
-  if (!data.rows.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucun versement ce mois-ci.')); return; }
+  if (!data.rows.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucun versement sur la période.')); return; }
   body.appendChild(el('div', { class: 'table-wrap' }, el('table', {},
     el('thead', {}, el('tr', {}, ['Date', 'Prestataire', 'Référence', 'Statut prestataire', 'Montant', 'Frais', 'Transactions', 'Banque', 'État', ''].map((h, i) => el('th', { class: [4, 5].includes(i) ? 'num' : '' }, h)))),
     el('tbody', {}, data.rows.map(r => el('tr', {},
@@ -2066,13 +2084,7 @@ function fcSyncLine(sync) {
 
 // ------------------------------------------------------------------ Tableau de bord : CA encaissé par moyen de paiement, exercice fiscal (migration 39)
 async function pspDashboardTab(body, p, go) {
-  const ec = exerciceCourant();
-  const cur = { from: p.db_from || '', to: p.db_to || '' };
-  const isFy = y => { const [a, b] = exercice(y); return (cur.from || isoDate(exercice(ec)[0])) === isoDate(a) && (cur.to || isoDate(exercice(ec)[1])) === isoDate(b); };
-  const tile = y => { const [a, b] = exercice(y);
-    return el('button', { class: 'fy-tile' + (isFy(y) ? ' on' : ''), onclick: () => go({ ...p, db_from: isoDate(a), db_to: isoDate(b) }) },
-      el('span', { class: 'fy-y' }, `${y}-${String(y + 1).slice(2)}`), el('span', { class: 'fy-d' }, `juin ${y} → mai ${y + 1}`), y === ec ? el('span', { class: 'fy-cur' }, 'en cours') : null); };
-  const from = el('input', { type: 'date', value: cur.from }), to = el('input', { type: 'date', value: cur.to });
+  const cur = { from: p.from, to: p.to };
   const dash = await api('GET', '/api/psp/dashboard?' + qs(cur));
   const provs = dash.providers, months = dash.months;
   const cell = {}; dash.rows.forEach(r => { cell[r.provider + '|' + r.month] = r; });
@@ -2086,12 +2098,7 @@ async function pspDashboardTab(body, p, go) {
   body.append(
     el('p', { class: 'small muted' }, 'Chiffre d\'affaires web réellement encaissé, par moyen de paiement (rapport « Paiements » de Shopify). Montants TTC, port inclus, nets des remboursements ; ',
       'un paiement compte le jour de l\'encaissement, un remboursement le jour du remboursement. Les commandes jamais payées n\'y figurent pas. Les encaissements des caisses magasin, qui remontent aussi dans Shopify, sont exclus.'),
-    el('div', { class: 'row', style: 'align-items:flex-end;gap:14px;margin:10px 0 14px' },
-      el('div', {}, el('div', { class: 'f-label' }, 'Exercice fiscal'), el('div', { class: 'fy-grid', style: 'grid-template-columns:repeat(3,minmax(150px,1fr))' }, [ec - 2, ec - 1, ec].map(tile))),
-      el('div', {}, el('div', { class: 'f-label' }, 'Ou une période'), el('div', { class: 'row', style: 'gap:6px' }, el('label', { class: 'f' }, 'Du', from), el('label', { class: 'f' }, 'Au', to),
-        el('button', { class: 'small', style: 'align-self:flex-end', onclick: () => go({ ...p, db_from: from.value, db_to: to.value }) }, 'Appliquer')))),
-    el('div', { class: 'small muted', style: 'margin-bottom:10px' }, `Période du ${d(dash.from)} au ${d(dash.to)}`
-      + (cov.pay_from ? ` · encaissements connus de ${mLabel(cov.pay_from)} à ${mLabel(cov.pay_to)}, lus le ${dt(cov.fetched_at)}` : ' · aucune donnée d\'encaissement chargée')));
+    el('div', { class: 'small muted', style: 'margin-bottom:10px' }, (cov.pay_from ? `Encaissements connus de ${mLabel(cov.pay_from)} à ${mLabel(cov.pay_to)}, lus le ${dt(cov.fetched_at)}` : 'Aucune donnée d\'encaissement chargée')));
   if (!provs.length) { body.appendChild(el('div', { class: 'empty' }, 'Aucun encaissement sur cette période.')); return; }
   // Indicateurs
   body.appendChild(el('div', { class: 'kpis' },
