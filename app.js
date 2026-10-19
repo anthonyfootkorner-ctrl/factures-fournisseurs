@@ -86,7 +86,8 @@ function asList(v) { return Array.isArray(v) ? v : (typeof v === 'string' && v ?
 function pspEtat(v) { return v.etat === 'en_transit' && ['scheduled', 'pending'].includes(String(v.status || '').toLowerCase()) ? 'programme' : v.etat; }
 const PSP_ETAT_AIDE = { recu: 'Virement retrouvé sur le compte bancaire, montant conforme', en_transit: 'Le prestataire a envoyé le virement ; il n\'est pas encore sur un relevé importé',
   programme: 'Virement annoncé par le prestataire, pas encore envoyé', en_retard: 'Le virement aurait dû arriver sur le compte : à vérifier',
-  ecart: 'Le montant reçu en banque ne correspond pas au versement annoncé', releve_manquant: 'Relevé bancaire de cette période pas encore importé' };
+  ecart: 'Le montant reçu en banque ne correspond pas au versement annoncé', releve_manquant: 'Relevé bancaire de cette période pas encore importé',
+  hors_releves: 'Versement antérieur au premier relevé bancaire importé pour ce prestataire : non vérifiable' };
 function pspEtatBadge(v) { const k = pspEtat(v); const b = badge('psp_etat', k); if (PSP_ETAT_AIDE[k]) b.title = PSP_ETAT_AIDE[k]; return b; }
 function badge(map, key) { const v = (L[map] || {})[key] || [key, '']; return el('span', { class: 'badge ' + v[1] }, v[0]); }
 
@@ -1829,7 +1830,7 @@ function ignoreModal(r) {
 // « Programmé » : annoncé mais pas encore parti ; « Envoyé » : parti chez le prestataire, pas encore retrouvé sur un relevé ;
 // « Reçu et vérifié » : rattaché à un crédit bancaire, montant conforme.
 L.psp_etat = { recu: ['Reçu et vérifié', 'b-ok'], en_transit: ['Envoyé', 'b-info'], programme: ['Programmé', ''], en_retard: ['En retard', 'b-bad'], ecart: ['Écart', 'b-bad'],
-  releve_manquant: ['Relevé à importer', 'b-warn'], negatif: ['Règlement négatif', 'b-warn'], echec: ['Échec', 'b-bad'] };
+  releve_manquant: ['Relevé à importer', 'b-warn'], hors_releves: ['Avant les relevés', ''], negatif: ['Règlement négatif', 'b-warn'], echec: ['Échec', 'b-bad'] };
 L.psp_todo = { commande_introuvable: ['Commande introuvable chez le prestataire', 'b-bad'], ecart_montant: ['Écart de montant', 'b-warn'],
   versement_retard: ['Versement non arrivé', 'b-bad'], ecart_versement: ['Écart de versement', 'b-bad'], litige: ['Litige / chargeback', 'b-warn'],
   versement_negatif: ['Règlement négatif', 'b-warn'], credit_non_rattache: ['Crédit bancaire non rattaché', 'b-info'],
@@ -1910,29 +1911,30 @@ function pspCards(ov, p, go) {
   const allCa = ov.providers.reduce((s, x) => s + enc(x), 0);
   const hasData = x => { const c = x.couverture || {}; return !!((c.transactions || {}).du || (c.versements || {}).du); };
   const cov = x => { const c = x.couverture || {}; const r = (c.transactions || {}).du ? c.transactions : (c.versements || {}); return r.du ? `exports du ${d(r.du)} au ${d(r.au)}` : 'aucun export prestataire'; };
+  // Le suivi détaillé (commandes, transactions, versements) commence avec la synchro Shopify : avant, seul le Tableau de bord est renseigné.
+  const cov0 = ov.providers.map(x => ((x.couverture || {}).commandes || {}).du).filter(Boolean).sort()[0];
+  const before = !!cov0 && p.to < cov0, partial = !!cov0 && !before && p.from < cov0;
   const card = x => el('div', { class: 'kpi psp-card' + (x.n_anomalies ? ' has-pb' : '') },
     el('div', { class: 'psp-head' }, el('strong', {}, x.label),
       x.n_anomalies ? el('a', { href: '#', class: 'badge b-bad', onclick: e => { e.preventDefault(); go({ ...p, tab: 'a-traiter', provider: x.code, kind: '' }); } }, `${x.n_anomalies} à traiter`)
         : (!hasData(x) ? (x.n_commandes ? el('span', { class: 'badge b-warn' }, 'Aucun export') : null)
           : el('span', { class: 'badge b-ok' }, 'RAS'))),
     el('div', { class: 'v' }, money(enc(x), 'EUR')),
-    el('div', { class: 's' }, x.n_commandes ? `${x.n_commandes} commande(s) · CA commandes ${money(x.ca_brut)}` + (x.remboursements ? ` · remboursé ${money(x.remboursements)}` : '')
+    el('div', { class: 's' }, x.n_commandes && !before ? `${x.n_commandes} commande(s) · CA commandes ${money(x.ca_brut)}` + (x.remboursements ? ` · remboursé ${money(x.remboursements)}` : '')
       : (x.encaisse_rembourse ? `encaissé net · remboursé ${money(x.encaisse_rembourse)}` : 'encaissé net')),
     el('dl', { class: 'psp-lines' },
       el('dt', {}, 'Frais'), el('dd', {}, x.frais ? `${money(x.frais)} (${pct(x.frais, x.ca_brut)})` : '—'),
       el('dt', {}, 'Versé'), el('dd', {}, money(x.verse) + (x.n_versements ? ` · ${x.n_versements} vers.` : '')),
       el('dt', {}, 'Reçu en banque'), el('dd', { class: x.verse && x.recu_banque < x.verse ? 'warn' : '' }, money(x.recu_banque) + (x.n_versements ? ` · ${x.n_recus}/${x.n_versements}` : '')),
-      el('dt', {}, 'En attente'), el('dd', {}, money(x.en_attente))),
-    el('div', { class: 'small muted' }, cov(x)));
-  // Le suivi détaillé (commandes, transactions, versements) commence avec la synchro Shopify : avant, seul le Tableau de bord est renseigné.
-  const cov0 = ov.providers.map(x => ((x.couverture || {}).commandes || {}).du).filter(Boolean).sort()[0];
-  const before = !!cov0 && p.to < cov0, partial = !!cov0 && !before && p.from < cov0;
+      el('dt', {}, 'En attente'), el('dd', {}, money(x.en_attente)),
+      x.hors_releves ? [el('dt', { title: PSP_ETAT_AIDE.hors_releves }, 'Avant les relevés'), el('dd', { class: 'muted', title: PSP_ETAT_AIDE.hors_releves }, money(x.hors_releves) + (x.n_hors_releves ? ` · ${x.n_hors_releves} vers.` : ''))] : null),
+    el('div', { class: 'small muted' }, before ? 'suivi détaillé non disponible sur cette période' : cov(x)));
   const notice = before || partial ? el('div', { class: 'small muted', style: 'margin:0 0 10px' },
     `Les montants des cartes sont les encaissements Shopify par moyen de paiement (tout l'historique). Le suivi détaillé (commandes, frais, versements, banque) commence le ${d(cov0)}` +
     (before ? ' : il n\'est pas disponible sur cette période.' : ' : il ne couvre que la partie de la période postérieure à cette date.')) : null;
   return el('div', {},
     el('div', { class: 'row', style: 'align-items:baseline;margin-bottom:8px' }, el('h2', { style: 'margin:0' }, p.from === isoDate(exercice(exerciceCourant())[0]) && p.to === isoDate(exercice(exerciceCourant())[1]) ? `Exercice ${exerciceCourant()}-${String(exerciceCourant() + 1).slice(2)}` : `Du ${d(p.from)} au ${d(p.to)}`),
-      el('span', { class: 'muted' }, `Encaissé net ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')}` + (tot.n ? ` (${tot.n} commandes)` : '') + ` · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
+      el('span', { class: 'muted' }, `Encaissé net ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')}` + (tot.n && !before ? ` (${tot.n} commandes)` : '') + ` · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
     notice, el('div', { class: 'psp-cards' }, tracked.map(card)),
     others.length ? el('div', { class: 'small muted', style: 'margin:-6px 0 16px' }, 'Sans versement suivi : ', others.map(x => `${x.label} ${money(x.ca_brut, 'EUR')} (${x.n_commandes} cmd)`).join(' · ')) : null);
 }
@@ -2151,7 +2153,7 @@ async function pspVatTab(body, p, go) {
   // Mois de la période choisie en haut de page (from / to) ; détail extrait mois par mois depuis Shopify (psp_vat_lines)
   const mFrom = (p.from || '').slice(0, 7), mTo = (p.to || '').slice(0, 7);
   const wanted = []; for (let y = +mFrom.slice(0, 4), m = +mFrom.slice(5, 7); `${y}-${String(m).padStart(2, '0')}` <= mTo && wanted.length < 24; m++) { if (m > 12) { m = 1; y++; } wanted.push(`${y}-${String(m).padStart(2, '0')}`); }
-  const all = await api('GET', '/api/psp/vat?' + qs({ month: p.vat_month || '' }));
+  const [all, periods] = await Promise.all([api('GET', '/api/psp/vat?' + qs({ month: p.vat_month || '' })), api('GET', '/api/psp/vat/periods')]);
   const v = { ...all, months: all.months.filter(m => m.month >= mFrom && m.month <= mTo) };
   const missing = wanted.filter(m => !v.months.some(x => x.month === m) && m <= new Date().toISOString().slice(0, 7));
   const extract = canWrite() && !S.demo && missing.length ? el('button', { onclick: () => act(async () => { for (const m of missing) await api('POST', '/api/psp/vat/refresh', { month: m }); },
@@ -2178,6 +2180,20 @@ async function pspVatTab(body, p, go) {
         el('td', { class: 'num' }, el('strong', {}, money(m.france_ht))), el('td', { class: 'num' }, el('strong', {}, money(m.france_tva))),
         el('td', { class: 'small' }, m.stockly ? `facture ${m.stockly.invoice_no}` : el('span', { class: 'muted' }, '—')),
         el('td', {}, download(m))))))));
+
+  // Excel complet de la période (tous les mois dans un seul classeur), préparé par le poste de traitement à la demande
+  if (v.months.length > 1) {
+    const per = periods.find(x => x.from === mFrom && x.to === mTo);
+    const label = mFrom.slice(5) === '06' && mTo.slice(5) === '05' && +mTo.slice(0, 4) === +mFrom.slice(0, 4) + 1 ? `l'exercice ${mFrom.slice(0, 4)}-${mTo.slice(2, 4)}` : `la période ${monthLabel(mFrom).toLowerCase()} → ${monthLabel(mTo).toLowerCase()}`;
+    const ask = txt => canWrite() && !S.demo ? el('button', { onclick: () => act(() => api('POST', '/api/psp/vat/period', { from: mFrom, to: mTo })).then(() =>
+      toast('Demande enregistrée : le poste de traitement prépare le fichier, comptez 5 à 10 minutes puis rechargez la page.')).then(() => go(p)) }, txt) : null;
+    body.appendChild(el('div', { class: 'row', style: 'margin:10px 0 4px;align-items:center;flex-wrap:wrap' },
+      per && per.path ? el('button', { class: 'primary', onclick: () => act(() => openStored('exports', per.path, per.filename)) }, `Télécharger l'Excel complet de ${label}`) : null,
+      per && per.path ? el('span', { class: 'small muted' }, `${per.months} mois, ${per.lines} lignes · généré le ${dt(per.generated_at)}` + (per.stale ? ' · données modifiées depuis : régénération en cours' : '')) : null,
+      per && !per.path ? el('span', { class: 'muted' }, `Excel de ${label} en préparation par le poste de traitement (demandé le ${dt(per.requested_at)})…`) : null,
+      !per ? ask(`Préparer l'Excel complet de ${label}`) : null,
+      !per ? el('span', { class: 'small muted' }, 'Un seul classeur : synthèse par mois, détail de toutes les commandes, pays, factures Stockly.') : null));
+  }
 
   // Détail du mois choisi
   const det = v.detail;
