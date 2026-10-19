@@ -1949,7 +1949,7 @@ function pspCards(ov, p, go) {
     `Les montants des cartes sont les encaissements Shopify par moyen de paiement (tout l'historique). Le suivi détaillé (commandes, frais, versements, banque) commence le ${d(cov0)}` +
     (before ? ' : il n\'est pas disponible sur cette période.' : ' : il ne couvre que la partie de la période postérieure à cette date.')) : null;
   const totalCard = el('div', { class: 'kpi psp-card psp-total' },
-    el('div', { class: 'psp-head' }, el('span', { class: 'psp-title' }, el('span', { class: 'psp-logo', style: 'background:var(--accent)' }, 'Σ'), el('strong', {}, 'Total web')),
+    el('div', { class: 'psp-head' }, el('span', { class: 'psp-title' }, el('span', { class: 'psp-logo', style: 'background:var(--brand)' }, 'Σ'), el('strong', {}, 'Total web')),
       tot.pb ? el('a', { href: '#', class: 'badge b-bad', onclick: e => { e.preventDefault(); go({ ...p, tab: 'a-traiter', provider: '', kind: '' }); } }, `${tot.pb} à traiter`) : el('span', { class: 'badge b-ok' }, 'RAS')),
     el('div', { class: 'v' }, money(allCa, 'EUR')),
     el('div', { class: 's' }, `encaissé net, ${tracked.length} moyens de paiement suivis` + (tot.rb ? ` · remboursé ${money(tot.rb)}` : '') + (allCa !== tot.ca ? ` · dont sans versement suivi ${money(allCa - tot.ca)}` : '')),

@@ -179,7 +179,7 @@ details summary { cursor: pointer; color: var(--brand-2); font-weight: 600; }
 .psp-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .psp-logo { width: 26px; height: 26px; border-radius: 7px; object-fit: contain; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 13px; flex: none; background: #fff; }
 img.psp-logo { padding: 3px; }
-.psp-card.psp-total { border-color: var(--accent); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, var(--panel)) 0%, var(--panel) 100%); }
+.psp-card.psp-total { border-color: var(--brand); background: linear-gradient(180deg, color-mix(in srgb, var(--brand) 12%, var(--panel)) 0%, var(--panel) 100%); }
 .psp-card.psp-total .v { font-size: 26px; }
 .psp-lines { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 10px 0 6px; font-size: 12px; }
 .psp-lines dt { color: var(--muted); }
