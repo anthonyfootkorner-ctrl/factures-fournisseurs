@@ -1903,8 +1903,11 @@ async function viewEncaissements(view) {
 function pspCards(ov, p, go) {
   const tracked = ov.providers.filter(x => x.tracked);
   const others = ov.providers.filter(x => !x.tracked && x.ca_brut);
-  const tot = tracked.reduce((a, x) => ({ ca: a.ca + x.ca_brut, n: a.n + x.n_commandes, f: a.f + x.frais, v: a.v + x.verse, w: a.w + x.en_attente }), { ca: 0, n: 0, f: 0, v: 0, w: 0 });
-  const allCa = ov.providers.reduce((s, x) => s + x.ca_brut, 0);
+  // Montant principal des cartes : encaissé net (rapport « Paiements » Shopify par mois, tout l'historique) ; les commandes
+  // synchronisées (nombre, CA commandes) ne sont connues que depuis le début de la synchro.
+  const enc = x => x.encaisse || 0;
+  const tot = tracked.reduce((a, x) => ({ ca: a.ca + enc(x), n: a.n + x.n_commandes, f: a.f + x.frais, v: a.v + x.verse, w: a.w + x.en_attente }), { ca: 0, n: 0, f: 0, v: 0, w: 0 });
+  const allCa = ov.providers.reduce((s, x) => s + enc(x), 0);
   const hasData = x => { const c = x.couverture || {}; return !!((c.transactions || {}).du || (c.versements || {}).du); };
   const cov = x => { const c = x.couverture || {}; const r = (c.transactions || {}).du ? c.transactions : (c.versements || {}); return r.du ? `exports du ${d(r.du)} au ${d(r.au)}` : 'aucun export prestataire'; };
   const card = x => el('div', { class: 'kpi psp-card' + (x.n_anomalies ? ' has-pb' : '') },
@@ -1912,8 +1915,9 @@ function pspCards(ov, p, go) {
       x.n_anomalies ? el('a', { href: '#', class: 'badge b-bad', onclick: e => { e.preventDefault(); go({ ...p, tab: 'a-traiter', provider: x.code, kind: '' }); } }, `${x.n_anomalies} à traiter`)
         : (!hasData(x) ? (x.n_commandes ? el('span', { class: 'badge b-warn' }, 'Aucun export') : null)
           : el('span', { class: 'badge b-ok' }, 'RAS'))),
-    el('div', { class: 'v' }, money(x.ca_brut, 'EUR')),
-    el('div', { class: 's' }, `${x.n_commandes} commande(s)` + (x.remboursements ? ` · remboursé ${money(x.remboursements)}` : '')),
+    el('div', { class: 'v' }, money(enc(x), 'EUR')),
+    el('div', { class: 's' }, x.n_commandes ? `${x.n_commandes} commande(s) · CA commandes ${money(x.ca_brut)}` + (x.remboursements ? ` · remboursé ${money(x.remboursements)}` : '')
+      : (x.encaisse_rembourse ? `encaissé net · remboursé ${money(x.encaisse_rembourse)}` : 'encaissé net')),
     el('dl', { class: 'psp-lines' },
       el('dt', {}, 'Frais'), el('dd', {}, x.frais ? `${money(x.frais)} (${pct(x.frais, x.ca_brut)})` : '—'),
       el('dt', {}, 'Versé'), el('dd', {}, money(x.verse) + (x.n_versements ? ` · ${x.n_versements} vers.` : '')),
@@ -1924,12 +1928,12 @@ function pspCards(ov, p, go) {
   const cov0 = ov.providers.map(x => ((x.couverture || {}).commandes || {}).du).filter(Boolean).sort()[0];
   const before = !!cov0 && p.to < cov0, partial = !!cov0 && !before && p.from < cov0;
   const notice = before || partial ? el('div', { class: 'small muted', style: 'margin:0 0 10px' },
-    `Le suivi détaillé par prestataire (commandes, versements, banque) commence le ${d(cov0)}. ` + (before ? 'Sur cette période, seul le Tableau de bord (encaissements Shopify par moyen de paiement) est renseigné.'
-      : 'Les cartes ci-dessous ne couvrent que la partie de la période postérieure à cette date ; le Tableau de bord couvre toute la période.')) : null;
+    `Les montants des cartes sont les encaissements Shopify par moyen de paiement (tout l'historique). Le suivi détaillé (commandes, frais, versements, banque) commence le ${d(cov0)}` +
+    (before ? ' : il n\'est pas disponible sur cette période.' : ' : il ne couvre que la partie de la période postérieure à cette date.')) : null;
   return el('div', {},
     el('div', { class: 'row', style: 'align-items:baseline;margin-bottom:8px' }, el('h2', { style: 'margin:0' }, p.from === isoDate(exercice(exerciceCourant())[0]) && p.to === isoDate(exercice(exerciceCourant())[1]) ? `Exercice ${exerciceCourant()}-${String(exerciceCourant() + 1).slice(2)}` : `Du ${d(p.from)} au ${d(p.to)}`),
-      el('span', { class: 'muted' }, `CA web ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')} (${tot.n} commandes) · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
-    notice, before ? null : el('div', { class: 'psp-cards' }, tracked.map(card)),
+      el('span', { class: 'muted' }, `Encaissé net ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')}` + (tot.n ? ` (${tot.n} commandes)` : '') + ` · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
+    notice, el('div', { class: 'psp-cards' }, tracked.map(card)),
     others.length ? el('div', { class: 'small muted', style: 'margin:-6px 0 16px' }, 'Sans versement suivi : ', others.map(x => `${x.label} ${money(x.ca_brut, 'EUR')} (${x.n_commandes} cmd)`).join(' · ')) : null);
 }
 
