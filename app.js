@@ -1920,10 +1920,16 @@ function pspCards(ov, p, go) {
       el('dt', {}, 'Reçu en banque'), el('dd', { class: x.verse && x.recu_banque < x.verse ? 'warn' : '' }, money(x.recu_banque) + (x.n_versements ? ` · ${x.n_recus}/${x.n_versements}` : '')),
       el('dt', {}, 'En attente'), el('dd', {}, money(x.en_attente))),
     el('div', { class: 'small muted' }, cov(x)));
+  // Le suivi détaillé (commandes, transactions, versements) commence avec la synchro Shopify : avant, seul le Tableau de bord est renseigné.
+  const cov0 = ov.providers.map(x => ((x.couverture || {}).commandes || {}).du).filter(Boolean).sort()[0];
+  const before = !!cov0 && p.to < cov0, partial = !!cov0 && !before && p.from < cov0;
+  const notice = before || partial ? el('div', { class: 'small muted', style: 'margin:0 0 10px' },
+    `Le suivi détaillé par prestataire (commandes, versements, banque) commence le ${d(cov0)}. ` + (before ? 'Sur cette période, seul le Tableau de bord (encaissements Shopify par moyen de paiement) est renseigné.'
+      : 'Les cartes ci-dessous ne couvrent que la partie de la période postérieure à cette date ; le Tableau de bord couvre toute la période.')) : null;
   return el('div', {},
     el('div', { class: 'row', style: 'align-items:baseline;margin-bottom:8px' }, el('h2', { style: 'margin:0' }, p.from === isoDate(exercice(exerciceCourant())[0]) && p.to === isoDate(exercice(exerciceCourant())[1]) ? `Exercice ${exerciceCourant()}-${String(exerciceCourant() + 1).slice(2)}` : `Du ${d(p.from)} au ${d(p.to)}`),
       el('span', { class: 'muted' }, `CA web ${money(allCa, 'EUR')} · prestataires suivis ${money(tot.ca, 'EUR')} (${tot.n} commandes) · frais ${money(tot.f)} (${pct(tot.f, tot.ca)}) · versé ${money(tot.v)} · en attente ${money(tot.w)}`)),
-    el('div', { class: 'psp-cards' }, tracked.map(card)),
+    notice, before ? null : el('div', { class: 'psp-cards' }, tracked.map(card)),
     others.length ? el('div', { class: 'small muted', style: 'margin:-6px 0 16px' }, 'Sans versement suivi : ', others.map(x => `${x.label} ${money(x.ca_brut, 'EUR')} (${x.n_commandes} cmd)`).join(' · ')) : null);
 }
 
