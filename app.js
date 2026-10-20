@@ -2251,6 +2251,12 @@ async function pspVatTab(body, p, go) {
   body.append(el('h2', { style: 'margin-top:22px' }, `${monthLabel(cur.month)} — part France taxable`), actions,
     el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Canal de vente (livraison France)'), el('th', {}, 'Traitement'),
       el('th', { class: 'num' }, 'Lignes'), el('th', { class: 'num' }, 'Base HT'), el('th', { class: 'num' }, 'TVA'), el('th', { class: 'num' }, 'TTC'))), el('tbody', {}, rows))),
+    (v.by_gateway || []).length ? el('div', { class: 'panel', style: 'margin-top:12px' }, el('h3', {}, 'Par moyen de paiement'),
+      el('p', { class: 'small muted' }, 'Toutes les ventes du mois (hors non payées et magasin), d\'après le rapport « Paiements » de Shopify ; une commande réglée avec plusieurs moyens (carte cadeau + carte) est comptée sous les deux, séparés par « + ».'),
+      el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Moyen de paiement'), el('th', { class: 'num' }, 'Lignes'), el('th', { class: 'num' }, 'CA web TTC'),
+        el('th', { class: 'num' }, 'dont France taxable TTC'), el('th', { class: 'num' }, 'Base HT'), el('th', { class: 'num' }, 'TVA'))),
+        el('tbody', {}, v.by_gateway.map(g => el('tr', {}, el('td', {}, g.gateway), el('td', { class: 'num' }, g.n), el('td', { class: 'num' }, money(g.ttc)),
+          el('td', { class: 'num' }, money(g.france_ttc)), el('td', { class: 'num' }, money(g.ht)), el('td', { class: 'num' }, money(g.tva)))))))) : null,
     info.length ? el('div', { class: 'panel', style: 'margin-top:12px' }, el('h3', {}, 'Hors base taxable France (pour information)'),
       el('table', {}, el('tbody', {}, info.map(([l, c, u]) => el('tr', {}, el('td', {}, l), el('td', { class: 'num nowrap' }, money(c) + ' ' + u)))))) : null);
 
