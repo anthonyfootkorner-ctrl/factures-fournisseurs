@@ -2173,6 +2173,7 @@ async function pspDashboardTab(body, p, go) {
 // ------------------------------------------------------------------ TVA & CA (rapport « Ventes » Shopify par commande, migration 38)
 const VAT_KIND = {
   tva_shopify: ['TVA calculée par Shopify', 'b-ok'], tva_extraite: ['TVA extraite du TTC (TikTok via Channable, importé sans TVA)', 'b-warn'],
+  tva_extraite_remb: ['TVA extraite du TTC (remboursement saisi en montant libre, sans TVA dans Shopify)', 'b-warn'],
   stockly: ['Exclu : remplacé par la facture Stockly', ''], baback: ['Exclu : Baback (à confirmer avec le comptable)', ''],
   hors_france: ['Hors France', ''], non_payee: ['Non payée (paiement expiré) : exclue', 'b-bad'], non_payee_fr: ['Non payée (paiement expiré) : exclue', 'b-bad'],
 };
@@ -2196,7 +2197,7 @@ async function pspVatTab(body, p, go) {
   body.append(
     el('p', { class: 'small muted' }, 'CA web et part France taxable, mois par mois, d\'après le rapport « Ventes » de Shopify détaillé commande par commande (ventes le jour de la commande, retours le jour du remboursement, frais de port inclus). ',
       'Corrections appliquées : les commandes jamais payées (paiement expiré) et les ventes magasin synchronisées depuis Fastmag (canal SyncTo Fastmag) sont retirées, Shopify les comptant quand même ; la TVA des ventes TikTok, importées sans TVA, est extraite du TTC ; ',
-      'Stockly est remplacé par la facture de TSG Lab (partie à 20 %). L\'Excel complet de chaque mois contient le détail de toutes les commandes et se met à jour automatiquement.'),
+      'Stockly est remplacé par la facture de TSG Lab (partie à 20 %) ; les remboursements France saisis en montant libre (sans TVA dans Shopify) voient leur TVA extraite du TTC. L\'Excel complet de chaque mois contient le détail de toutes les commandes et se met à jour automatiquement.'),
     el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {}, el('th', {}, 'Mois'), el('th', { class: 'num' }, 'CA Shopify affiché'), el('th', { class: 'num', title: 'Commandes jamais payées et ventes magasin synchronisées depuis Fastmag' }, 'Retiré'),
         el('th', { class: 'num' }, 'CA web réel TTC'), el('th', { class: 'num' }, 'dont France'), el('th', { class: 'num' }, 'France taxable HT'),
@@ -2226,7 +2227,7 @@ async function pspVatTab(body, p, go) {
   // Détail du mois choisi
   const det = v.detail;
   const sum = (kinds, f) => det.filter(x => kinds.includes(x.kind)).reduce((s, x) => s + (x[f] || 0), 0);
-  const fr = det.filter(x => x.kind === 'tva_shopify' || x.kind === 'tva_extraite').sort((a, b) => (a.kind === b.kind ? b.ttc - a.ttc : a.kind === 'tva_shopify' ? -1 : 1));
+  const fr = det.filter(x => ['tva_shopify', 'tva_extraite', 'tva_extraite_remb'].includes(x.kind)).sort((a, b) => (a.kind === b.kind ? b.ttc - a.ttc : a.kind === 'tva_shopify' ? -1 : b.kind === 'tva_shopify' ? 1 : a.kind.localeCompare(b.kind)));
   const sk = cur.stockly;
   const rows = fr.map(x => el('tr', {}, el('td', {}, x.channel), el('td', { class: 'small' }, el('span', { class: 'badge ' + VAT_KIND[x.kind][1] }, VAT_KIND[x.kind][0])),
     el('td', { class: 'num' }, x.n), el('td', { class: 'num' }, money(x.ht)), el('td', { class: 'num' }, money(x.tva)), el('td', { class: 'num' }, money(ttc(x.ht, x.tva)))));
